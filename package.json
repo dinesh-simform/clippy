@@ -1,7 +1,7 @@
 {
-  "name": "simple-electron-app",
+  "name": "clipsy",
   "version": "1.0.0",
-  "description": "A simple Electron application with React",
+  "description": "A secure, modern clipboard manager built with Electron and React.",
   "main": "main.js",
   "scripts": {
     "start": "npm run build && electron .",
