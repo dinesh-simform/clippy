@@ -1,17 +1,42 @@
-const { app, BrowserWindow, Menu, Tray, clipboard, nativeImage } = require('electron');
+
+const { app, BrowserWindow, Menu, Tray, clipboard, nativeImage, ipcMain } = require('electron');
 const path = require('path');
 const { createTrayIcon } = require('./create-icon');
+const ClipboardDatabase = require('./database');
+
+  // Decrypt entry content (from renderer)
+  ipcMain.handle('decrypt-entry', async (event, entryId, password, masterPassword) => {
+    if (!db) return { success: false, error: 'No DB' };
+    const entry = db.getEntry(entryId);
+    if (!entry || !entry.is_encrypted) return { success: false, error: 'Not encrypted' };
+    // Try user password first
+    try {
+      const content = db.decrypt(entry.content, password, entry.iv);
+      return { success: true, content };
+    } catch (e) {
+      // Try master password if provided
+      if (masterPassword) {
+        try {
+          const content = db.decrypt(entry.content, masterPassword, entry.iv);
+          return { success: true, content };
+        } catch (e2) {
+          // fall through
+        }
+      }
+      return { success: false, error: 'Invalid password or corrupt data' };
+    }
+  });
 
 let tray = null;
-let clipboardHistory = []; // Store clipboard history
-const MAX_HISTORY = 10; // Maximum number of items to keep in history
+let db = null; // Database instance
 let lastClipboardText = ''; // Track last clipboard content
+let mainWindow = null; // Store reference to main window
 
 // Function to check and update clipboard
 function checkClipboard() {
   const currentText = clipboard.readText();
   
-  // If clipboard has new content, add it to history
+  // If clipboard has new content, add it to database
   if (currentText && currentText.trim() && currentText !== lastClipboardText) {
     lastClipboardText = currentText;
     addToClipboardHistory(currentText);
@@ -34,28 +59,166 @@ function startClipboardMonitoring() {
 }
 
 // Function to add text to clipboard history
-function addToClipboardHistory(text) {
-  if (!text || !text.trim()) return;
-  
-  // Remove if already exists (to move it to top)
-  clipboardHistory = clipboardHistory.filter(item => item !== text);
-  
-  // Add to beginning of array
-  clipboardHistory.unshift(text);
-  
-  // Keep only MAX_HISTORY items
-  if (clipboardHistory.length > MAX_HISTORY) {
-    clipboardHistory = clipboardHistory.slice(0, MAX_HISTORY);
-  }
-  
-  // Update tray menu to reflect new history
+/**
+ * Add to clipboard history
+ * @param {string} text
+ * @param {object} opts { encrypt: boolean, password: string }
+ */
+function addToClipboardHistory(text, opts = { encrypt: false, password: '' }) {
+  if (!text || !text.trim() || !db) return;
+  db.addEntry(text, opts);
   updateTrayMenu();
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('clipboard-updated');
+  }
 }
+  // Add entry with encryption support (from renderer)
+  ipcMain.handle('add-entry', async (event, text, opts) => {
+    if (!db) return null;
+    // opts.title is passed as custom_name
+    return db.addEntry(text, opts);
+  });
 
 // Function to truncate text with ellipsis
 function truncateText(text, maxLength = 50) {
   if (text.length <= maxLength) return text;
   return text.substring(0, maxLength) + '...';
+}
+
+// Setup IPC handlers for renderer communication
+function setupIPC() {
+  // Get all clipboard entries
+  ipcMain.handle('get-clipboard-entries', async () => {
+    if (!db) return [];
+    return db.getAllEntries();
+  });
+  
+  // Get recent entries
+  ipcMain.handle('get-recent-entries', async (event, limit = 50) => {
+    if (!db) return [];
+    return db.getRecentEntries(limit);
+  });
+  
+  // Search entries
+  ipcMain.handle('search-entries', async (event, query) => {
+    if (!db) return [];
+    return db.searchEntries(query);
+  });
+  
+  // Copy entry to clipboard (accepts entry ID)
+  ipcMain.handle('copy-entry', async (event, entryId) => {
+    if (!db) return false;
+    const entry = db.getEntry(entryId);
+    if (entry && entry.content) {
+      clipboard.writeText(entry.content);
+      return true;
+    }
+    return false;
+  });
+  
+  // Delete entry
+  ipcMain.handle('delete-entry', async (event, id) => {
+    if (!db) return false;
+    const result = db.deleteEntry(id);
+    if (mainWindow) {
+      mainWindow.webContents.send('clipboard-updated');
+    }
+    return result;
+  });
+  
+  // Toggle favorite
+  ipcMain.handle('toggle-favorite', async (event, id) => {
+    if (!db) return false;
+    const result = db.toggleFavorite(id);
+    if (mainWindow) {
+      mainWindow.webContents.send('clipboard-updated');
+    }
+    return result;
+  });
+  
+  // Update custom name
+  ipcMain.handle('update-custom-name', async (event, id, name) => {
+    if (!db) return false;
+    return db.updateCustomName(id, name);
+  });
+  
+  // Get total count
+  ipcMain.handle('get-count', async () => {
+    if (!db) return 0;
+    return db.getCount();
+  });
+  
+  // Clear all entries
+  ipcMain.handle('clear-all-entries', async () => {
+    if (!db) return false;
+    return db.clearAll();
+  });
+
+  // ===== CUSTOM CATEGORIES =====
+
+  // Create category
+  ipcMain.handle('create-category', async (event, name, color, icon) => {
+    if (!db) return null;
+    return db.createCategory(name, color, icon);
+  });
+
+  // Get all categories
+  ipcMain.handle('get-all-categories', async () => {
+    if (!db) return [];
+    return db.getAllCategories();
+  });
+
+  // Update category
+  ipcMain.handle('update-category', async (event, id, name, color, icon) => {
+    if (!db) return false;
+    return db.updateCategory(id, name, color, icon);
+  });
+
+  // Delete category
+  ipcMain.handle('delete-category', async (event, id) => {
+    if (!db) return false;
+    return db.deleteCategory(id);
+  });
+
+  // Assign category to entry
+  ipcMain.handle('assign-category', async (event, entryId, categoryId) => {
+    if (!db) return false;
+    const result = db.assignCategory(entryId, categoryId);
+    if (mainWindow) {
+      mainWindow.webContents.send('clipboard-updated');
+    }
+    return result;
+  });
+
+  // Remove category from entry
+  ipcMain.handle('remove-category', async (event, entryId, categoryId) => {
+    if (!db) return false;
+    const result = db.removeCategory(entryId, categoryId);
+    if (mainWindow) {
+      mainWindow.webContents.send('clipboard-updated');
+    }
+    return result;
+  });
+
+  // Get entries with categories
+  ipcMain.handle('get-entries-with-categories', async () => {
+    if (!db) return [];
+    return db.getAllEntriesWithCategories();
+  });
+
+  // Get entries by category
+  ipcMain.handle('get-entries-by-category', async (event, categoryId) => {
+    if (!db) return [];
+    return db.getEntriesByCategory(categoryId);
+  });
+
+  // ===== DATE FILTERING =====
+
+  // Get entries by date range
+  ipcMain.handle('get-entries-by-date-range', async (event, startTimestamp, endTimestamp) => {
+    if (!db) return [];
+    return db.getEntriesByDateRange(startTimestamp, endTimestamp);
+  });
 }
 
 // Create menu template
@@ -161,9 +324,9 @@ const menuTemplate = [
 
 function createWindow() {
   // Create the browser window
-  const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 700,
+  mainWindow = new BrowserWindow({
+    width: 1200,
+    height: 800,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false
@@ -175,6 +338,11 @@ function createWindow() {
 
   // Open DevTools in development (optional)
   // mainWindow.webContents.openDevTools();
+  
+  // Clear reference when window is closed
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
 }
 
 // Create system tray
@@ -204,16 +372,32 @@ function createTray() {
 
 // Function to update tray menu with current clipboard history
 function updateTrayMenu() {
-  if (!tray) return;
+  if (!tray || !db) return;
   
   const icon = createTrayIcon();
   
+  // Get recent entries from database
+  const recentEntries = db.getRecentEntries(3);
+  
   // Build history menu items
-  const historyMenuItems = clipboardHistory.length > 0
-    ? clipboardHistory.slice(0, 3).map((text, index) => ({
-        label: truncateText(text, 50),
+  const historyMenuItems = recentEntries.length > 0
+    ? recentEntries.map((entry) => ({
+        label: entry.custom_name || truncateText(entry.content, 50),
         click: () => {
-          clipboard.writeText(text); 
+          clipboard.writeText(entry.content);
+          const { dialog } = require('electron');
+          const windows = BrowserWindow.getAllWindows();
+          const targetWindow = windows.find(w => w.isVisible()) || windows[0];
+          
+          if (targetWindow) {
+            dialog.showMessageBox(targetWindow, {
+              type: 'info',
+              title: 'Text Copied',
+              message: 'Text copied to clipboard!',
+              detail: truncateText(entry.content, 100),
+              buttons: ['OK']
+            });
+          }
         }
       }))
     : [{
@@ -316,16 +500,22 @@ function updateTrayMenu() {
         const windows = BrowserWindow.getAllWindows();
         const targetWindow = windows.find(w => w.isVisible()) || windows[0];
         
-        if (targetWindow) {
+        if (targetWindow && db) {
           const { dialog } = require('electron');
-          const historyText = clipboardHistory.length > 0
-            ? clipboardHistory.map((text, i) => `${i + 1}. ${truncateText(text, 80)}`).join('\n\n')
+          const allEntries = db.getRecentEntries(10);
+          const totalCount = db.getCount();
+          
+          const historyText = allEntries.length > 0
+            ? allEntries.map((entry, i) => {
+                const label = entry.custom_name || truncateText(entry.content, 80);
+                return `${i + 1}. ${label}`;
+              }).join('\n\n')
             : 'No clipboard history';
           
           dialog.showMessageBox(targetWindow, {
             type: 'info',
             title: 'Clipboard History',
-            message: `${clipboardHistory.length} items in history:`,
+            message: `${totalCount} total items in database:`,
             detail: historyText,
             buttons: ['OK']
           });
@@ -338,14 +528,6 @@ function updateTrayMenu() {
       click: () => {
         clipboard.clear();
         console.log('Clipboard cleared');
-      }
-    },
-    {
-      label: 'Clear History',
-      click: () => {
-        clipboardHistory = [];
-        updateTrayMenu();
-        console.log('Clipboard history cleared');
       }
     },
     { type: 'separator' },
@@ -374,6 +556,13 @@ function updateTrayMenu() {
 
 // This method will be called when Electron has finished initialization
 app.whenReady().then(() => {
+  // Initialize database
+  db = new ClipboardDatabase();
+  console.log('Database initialized with', db.getCount(), 'entries');
+  
+  // Setup IPC handlers
+  setupIPC();
+  
   // Build menu from template
   const menu = Menu.buildFromTemplate(menuTemplate);
   Menu.setApplicationMenu(menu);
@@ -406,9 +595,13 @@ app.on('window-all-closed', () => {
   }
 });
 
-// Cleanup tray on quit
+// Cleanup tray and database on quit
 app.on('before-quit', () => {
   if (tray) {
     tray.destroy();
+  }
+  if (db) {
+    db.close();
+    console.log('Database connection closed');
   }
 });

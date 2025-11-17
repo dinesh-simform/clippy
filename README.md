@@ -15,8 +15,8 @@ A simple Electron application built with React and JavaScript.
 - 📋 Clipboard operations (copy, paste, clear)
 - 🕐 Clipboard history tracking (last 10 items)
 - ⚡ Quick access to recent clipboard items from tray menu
-- 🔄 Native clipboard event monitoring (real-time detection)
-- 📊 Captures clipboard content from any application instantly
+- 🔄 Automatic clipboard monitoring (checks every second)
+- 📊 Captures clipboard content from any application
 
 ## Screenshots
 
@@ -50,11 +50,11 @@ The app includes a system tray icon (visible in Ubuntu's taskbar) with the follo
 
 **How to Use Clipboard History:**
 1. Copy text from ANY application using `Ctrl+C`
-2. The app **instantly detects** clipboard changes using native events
+2. The app automatically monitors your clipboard every second
 3. Open the tray menu to see the last 3 items at the top
 4. Click any history item to copy it again
 5. Use "View Clipboard History" to see all 10 items
-6. Works in real-time - no polling delay!
+6. The clipboard is also checked whenever you open the tray menu
 
 **How to Copy Selected Text:**
 1. Select any text in the application
@@ -188,7 +188,6 @@ For active development:
 - **Webpack**: Module bundler
 - **Babel**: JavaScript transpiler
 - **Emotion**: CSS-in-JS styling (used by MUI)
-- **clipboard-event**: Native clipboard change detection
 
 ## License
 
