@@ -1,14 +1,18 @@
   
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Switch,
   FormControlLabel,
   TextField,
   InputAdornment,
-  IconButton
+  IconButton,
+  Chip,
+  Stack
 } from '@mui/material';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
+import LightModeIcon from '@mui/icons-material/LightMode';
+import DarkModeIcon from '@mui/icons-material/DarkMode';
 import {
   Box,
   CssBaseline,
@@ -37,19 +41,46 @@ import CategorySelector from './components/CategorySelector';
 
 const { ipcRenderer } = window.require('electron');
 
-// ...theme definition (same as before)...
-const theme = createTheme({
+// Create theme function based on mode
+const createAppTheme = (mode) => createTheme({
   palette: {
-    mode: 'light',
-    primary: { main: '#3b82f6', light: '#60a5fa', dark: '#2563eb', lighter: '#eff6ff' },
-    secondary: { main: '#8b5cf6', light: '#a78bfa', dark: '#7c3aed' },
-    success: { main: '#10b981', lighter: '#d1fae5' },
-    error: { main: '#ef4444', lighter: '#fee2e2' },
-    warning: { main: '#f59e0b', lighter: '#fef3c7' },
-    background: { default: '#f8fafc', paper: '#ffffff' },
-    divider: '#e2e8f0',
-    text: { primary: '#1e293b', secondary: '#64748b' },
-    action: { hover: '#f1f5f9', disabled: '#cbd5e1' }
+    mode: mode,
+    primary: { 
+      main: mode === 'light' ? '#3b82f6' : '#60a5fa', 
+      light: '#60a5fa', 
+      dark: '#2563eb', 
+      lighter: mode === 'light' ? '#eff6ff' : '#1e3a8a' 
+    },
+    secondary: { 
+      main: mode === 'light' ? '#8b5cf6' : '#a78bfa', 
+      light: '#a78bfa', 
+      dark: '#7c3aed' 
+    },
+    success: { 
+      main: mode === 'light' ? '#10b981' : '#34d399', 
+      lighter: mode === 'light' ? '#d1fae5' : '#064e3b' 
+    },
+    error: { 
+      main: mode === 'light' ? '#ef4444' : '#f87171', 
+      lighter: mode === 'light' ? '#fee2e2' : '#7f1d1d' 
+    },
+    warning: { 
+      main: mode === 'light' ? '#f59e0b' : '#fbbf24', 
+      lighter: mode === 'light' ? '#fef3c7' : '#78350f' 
+    },
+    background: { 
+      default: mode === 'light' ? '#f8fafc' : '#0f172a', 
+      paper: mode === 'light' ? '#ffffff' : '#1e293b' 
+    },
+    divider: mode === 'light' ? '#e2e8f0' : '#334155',
+    text: { 
+      primary: mode === 'light' ? '#1e293b' : '#f1f5f9', 
+      secondary: mode === 'light' ? '#64748b' : '#94a3b8' 
+    },
+    action: { 
+      hover: mode === 'light' ? '#f1f5f9' : '#334155', 
+      disabled: mode === 'light' ? '#cbd5e1' : '#475569' 
+    }
   },
   typography: {
     fontFamily: [
@@ -61,18 +92,37 @@ const theme = createTheme({
   },
   shape: { borderRadius: 8 },
   components: {
-    MuiAppBar: { styleOverrides: { root: { boxShadow: 'none', borderBottom: '1px solid #e2e8f0' } } },
-    MuiButton: { styleOverrides: { root: { textTransform: 'none', fontWeight: 600, boxShadow: 'none', '&:hover': { boxShadow: 'none' } } } },
+    MuiAppBar: { 
+      styleOverrides: { 
+        root: { 
+          boxShadow: 'none', 
+          borderBottom: mode === 'light' ? '1px solid #e2e8f0' : '1px solid #334155' 
+        } 
+      } 
+    },
+    MuiButton: { 
+      styleOverrides: { 
+        root: { 
+          textTransform: 'none', 
+          fontWeight: 600, 
+          boxShadow: 'none', 
+          '&:hover': { boxShadow: 'none' } 
+        } 
+      } 
+    },
     MuiIconButton: { styleOverrides: { root: { borderRadius: 8 } } }
   }
 });
 
 function App() {
+  const [themeMode, setThemeMode] = useState('light');
+  const [categories, setCategories] = useState([]);
   const [entries, setEntries] = useState([]);
   const [filteredEntries, setFilteredEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [selectedCategoryChips, setSelectedCategoryChips] = useState([]);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
@@ -89,6 +139,39 @@ function App() {
   const [masterDialogOpen, setMasterDialogOpen] = useState(false);
   const [masterInput, setMasterInput] = useState('');
   const [showMasterPassword, setShowMasterPassword] = useState(false);
+
+  // Create theme based on mode
+  const theme = useMemo(() => createAppTheme(themeMode), [themeMode]);
+
+  // Load theme preference
+  useEffect(() => {
+    const loadTheme = async () => {
+      const savedTheme = await ipcRenderer.invoke('get-theme-mode');
+      if (savedTheme) setThemeMode(savedTheme);
+    };
+    loadTheme();
+  }, []);
+
+  // Toggle theme
+  const handleThemeToggle = async () => {
+    const newMode = themeMode === 'light' ? 'dark' : 'light';
+    setThemeMode(newMode);
+    await ipcRenderer.invoke('set-theme-mode', newMode);
+  };
+
+  // Load categories
+  const loadCategories = async () => {
+    const cats = await ipcRenderer.invoke('get-all-categories');
+    setCategories(cats);
+  };
+
+  useEffect(() => {
+    loadCategories();
+    const handleCategoriesUpdate = () => loadCategories();
+    window.addEventListener('categories-updated', handleCategoriesUpdate);
+    return () => window.removeEventListener('categories-updated', handleCategoriesUpdate);
+  }, []);
+
   // Handler to save master password
   const handleSaveMasterPassword = () => {
     setMasterPassword(masterInput);
@@ -123,9 +206,9 @@ function App() {
   };
 
   // Filter entries based on category, search, and date
-  const filterEntries = (allEntries, category, query, range) => {
+  const filterEntries = (allEntries, category, query, range, chipFilters = []) => {
     let filtered = [...allEntries];
-    // Category filter
+    // Category filter from sidebar
     if (category === 'favorites') filtered = filtered.filter(e => e.is_favorite);
     else if (category === 'urls') filtered = filtered.filter(e => /^https?:\/\/.+/i.test(e.content));
     else if (category === 'emails') filtered = filtered.filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.content));
@@ -134,6 +217,26 @@ function App() {
       const catId = parseInt(category.replace('custom-', ''));
       filtered = filtered.filter(e => (e.categories || []).some(c => c.id === catId));
     }
+    
+    // Category chip filters (multiple categories including default and custom)
+    if (chipFilters.length > 0) {
+      filtered = filtered.filter(e => {
+        return chipFilters.some(chipCat => {
+          // Handle default categories (strings)
+          if (chipCat === 'favorites') return e.is_favorite;
+          if (chipCat === 'urls') return /^https?:\/\/.+/i.test(e.content);
+          if (chipCat === 'emails') return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.content);
+          if (chipCat === 'code') return /^(function|const|let|var|class|import|export|if|for|while)/.test(e.content);
+          // Handle custom categories (numeric IDs)
+          if (typeof chipCat === 'number') {
+            const entryCategoryIds = (e.categories || []).map(c => c.id);
+            return entryCategoryIds.includes(chipCat);
+          }
+          return false;
+        });
+      });
+    }
+    
     // Search filter
     if (query) filtered = filtered.filter(e => e.content.toLowerCase().includes(query.toLowerCase()) || (e.custom_name && e.custom_name.toLowerCase().includes(query.toLowerCase())));
     // Date filter
@@ -158,7 +261,7 @@ function App() {
   };
 
   useEffect(() => { fetchEntries(); }, []);
-  useEffect(() => { filterEntries(entries, selectedCategory, searchQuery, dateRange); }, [selectedCategory, searchQuery, dateRange, entries]);
+  useEffect(() => { filterEntries(entries, selectedCategory, searchQuery, dateRange, selectedCategoryChips); }, [selectedCategory, searchQuery, dateRange, entries, selectedCategoryChips]);
   useEffect(() => {
     const handleUpdate = () => fetchEntries();
     ipcRenderer.on('clipboard-updated', handleUpdate);
@@ -190,6 +293,9 @@ function App() {
             <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1, color: 'primary.main' }}>
               Clipboard Manager
             </Typography>
+            <IconButton onClick={handleThemeToggle} color="primary" sx={{ mr: 1 }}>
+              {themeMode === 'light' ? <DarkModeIcon /> : <LightModeIcon />}
+            </IconButton>
             <Button
               variant="outlined"
               color="secondary"
@@ -323,6 +429,136 @@ function App() {
               <SearchBar searchQuery={searchQuery} onSearchChange={handleSearchChange} />
               <DateFilter selectedRange={dateRange} onRangeChange={handleDateRangeChange} />
             </Box>
+            
+            {/* Category Filter Chips */}
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="caption" sx={{ mb: 1, display: 'block', color: 'text.secondary' }}>
+                Filter by categories:
+              </Typography>
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                {/* Default Categories */}
+                <Chip
+                  label="Favorites"
+                  icon={<span>⭐</span>}
+                  onClick={() => {
+                    setSelectedCategoryChips(prev => 
+                      prev.includes('favorites') 
+                        ? prev.filter(id => id !== 'favorites')
+                        : [...prev, 'favorites']
+                    );
+                  }}
+                  variant={selectedCategoryChips.includes('favorites') ? 'filled' : 'outlined'}
+                  sx={{
+                    borderColor: '#ffc107',
+                    bgcolor: selectedCategoryChips.includes('favorites') ? '#ffc107' : 'transparent',
+                    color: selectedCategoryChips.includes('favorites') ? '#000' : 'text.primary',
+                    '&:hover': {
+                      bgcolor: selectedCategoryChips.includes('favorites') ? '#ffb300' : 'action.hover',
+                    },
+                    mb: 1
+                  }}
+                />
+                <Chip
+                  label="URLs"
+                  icon={<span>🔗</span>}
+                  onClick={() => {
+                    setSelectedCategoryChips(prev => 
+                      prev.includes('urls') 
+                        ? prev.filter(id => id !== 'urls')
+                        : [...prev, 'urls']
+                    );
+                  }}
+                  variant={selectedCategoryChips.includes('urls') ? 'filled' : 'outlined'}
+                  sx={{
+                    borderColor: '#2196f3',
+                    bgcolor: selectedCategoryChips.includes('urls') ? '#2196f3' : 'transparent',
+                    color: selectedCategoryChips.includes('urls') ? '#fff' : 'text.primary',
+                    '&:hover': {
+                      bgcolor: selectedCategoryChips.includes('urls') ? '#1976d2' : 'action.hover',
+                    },
+                    mb: 1
+                  }}
+                />
+                <Chip
+                  label="Emails"
+                  icon={<span>📧</span>}
+                  onClick={() => {
+                    setSelectedCategoryChips(prev => 
+                      prev.includes('emails') 
+                        ? prev.filter(id => id !== 'emails')
+                        : [...prev, 'emails']
+                    );
+                  }}
+                  variant={selectedCategoryChips.includes('emails') ? 'filled' : 'outlined'}
+                  sx={{
+                    borderColor: '#4caf50',
+                    bgcolor: selectedCategoryChips.includes('emails') ? '#4caf50' : 'transparent',
+                    color: selectedCategoryChips.includes('emails') ? '#fff' : 'text.primary',
+                    '&:hover': {
+                      bgcolor: selectedCategoryChips.includes('emails') ? '#388e3c' : 'action.hover',
+                    },
+                    mb: 1
+                  }}
+                />
+                <Chip
+                  label="Code"
+                  icon={<span>💻</span>}
+                  onClick={() => {
+                    setSelectedCategoryChips(prev => 
+                      prev.includes('code') 
+                        ? prev.filter(id => id !== 'code')
+                        : [...prev, 'code']
+                    );
+                  }}
+                  variant={selectedCategoryChips.includes('code') ? 'filled' : 'outlined'}
+                  sx={{
+                    borderColor: '#9c27b0',
+                    bgcolor: selectedCategoryChips.includes('code') ? '#9c27b0' : 'transparent',
+                    color: selectedCategoryChips.includes('code') ? '#fff' : 'text.primary',
+                    '&:hover': {
+                      bgcolor: selectedCategoryChips.includes('code') ? '#7b1fa2' : 'action.hover',
+                    },
+                    mb: 1
+                  }}
+                />
+                
+                {/* Custom Categories */}
+                {categories.map((cat) => (
+                  <Chip
+                    key={cat.id}
+                    label={cat.name}
+                    icon={<span>{cat.icon || '📁'}</span>}
+                    onClick={() => {
+                      setSelectedCategoryChips(prev => 
+                        prev.includes(cat.id) 
+                          ? prev.filter(id => id !== cat.id)
+                          : [...prev, cat.id]
+                      );
+                    }}
+                    variant={selectedCategoryChips.includes(cat.id) ? 'filled' : 'outlined'}
+                    sx={{
+                      borderColor: cat.color || 'divider',
+                      bgcolor: selectedCategoryChips.includes(cat.id) ? cat.color : 'transparent',
+                      color: selectedCategoryChips.includes(cat.id) ? '#fff' : 'text.primary',
+                      '&:hover': {
+                        bgcolor: selectedCategoryChips.includes(cat.id) ? cat.color : 'action.hover',
+                      },
+                      mb: 1
+                    }}
+                  />
+                ))}
+                {selectedCategoryChips.length > 0 && (
+                  <Chip
+                    label="Clear filters"
+                    size="small"
+                    onDelete={() => setSelectedCategoryChips([])}
+                    color="default"
+                    sx={{ mb: 1 }}
+                  />
+                )}
+              </Stack>
+            </Box>
+            
             {/* Clipboard List */}
             <ClipboardList
               entries={filteredEntries}

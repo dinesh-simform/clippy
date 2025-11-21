@@ -1,6 +1,7 @@
 
-const { app, BrowserWindow, Menu, Tray, clipboard, nativeImage, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, Tray, clipboard, nativeImage, ipcMain, globalShortcut } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { createTrayIcon } = require('./create-icon');
 const ClipboardDatabase = require('./database');
 
@@ -31,6 +32,35 @@ let tray = null;
 let db = null; // Database instance
 let lastClipboardText = ''; // Track last clipboard content
 let mainWindow = null; // Store reference to main window
+let spotlightWindow = null; // Store reference to spotlight window
+let themeMode = 'light'; // Default theme
+
+// Get user data path for storing settings
+const userDataPath = app.getPath('userData');
+const settingsPath = path.join(userDataPath, 'settings.json');
+
+// Load settings
+function loadSettings() {
+  try {
+    if (fs.existsSync(settingsPath)) {
+      const data = fs.readFileSync(settingsPath, 'utf8');
+      const settings = JSON.parse(data);
+      themeMode = settings.themeMode || 'light';
+    }
+  } catch (error) {
+    console.error('Error loading settings:', error);
+  }
+}
+
+// Save settings
+function saveSettings() {
+  try {
+    const settings = { themeMode };
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+  } catch (error) {
+    console.error('Error saving settings:', error);
+  }
+}
 
 // Function to check and update clipboard
 function checkClipboard() {
@@ -219,6 +249,24 @@ function setupIPC() {
     if (!db) return [];
     return db.getEntriesByDateRange(startTimestamp, endTimestamp);
   });
+
+  // Theme management
+  ipcMain.handle('get-theme-mode', async () => {
+    return themeMode;
+  });
+
+  ipcMain.handle('set-theme-mode', async (event, mode) => {
+    themeMode = mode;
+    saveSettings();
+    // Notify all windows about theme change
+    if (mainWindow) {
+      mainWindow.webContents.send('theme-changed', mode);
+    }
+    if (spotlightWindow) {
+      spotlightWindow.webContents.send('theme-changed', mode);
+    }
+    return true;
+  });
 }
 
 // Create menu template
@@ -343,6 +391,66 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+// Create spotlight window
+function createSpotlightWindow() {
+  const { screen } = require('electron');
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.workAreaSize;
+
+  spotlightWindow = new BrowserWindow({
+    width: 700,
+    height: 500,
+    x: Math.floor((width - 700) / 2),
+    y: Math.floor((height - 500) / 3), // Position slightly above center
+    frame: false,
+    transparent: true,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
+
+  spotlightWindow.loadFile('spotlight.html');
+
+  // Hide on blur (when clicking outside)
+  spotlightWindow.on('blur', () => {
+    if (spotlightWindow && !spotlightWindow.webContents.isDevToolsOpened()) {
+      spotlightWindow.hide();
+    }
+  });
+
+  spotlightWindow.on('closed', () => {
+    spotlightWindow = null;
+  });
+
+  // Setup escape key to close
+  spotlightWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'Escape') {
+      spotlightWindow.hide();
+    }
+  });
+}
+
+// Toggle spotlight window
+function toggleSpotlightWindow() {
+  if (!spotlightWindow) {
+    createSpotlightWindow();
+  }
+
+  if (spotlightWindow.isVisible()) {
+    spotlightWindow.hide();
+  } else {
+    // Refresh data before showing
+    spotlightWindow.webContents.send('refresh-clipboard-data');
+    spotlightWindow.show();
+    spotlightWindow.focus();
+  }
 }
 
 // Create system tray
@@ -554,8 +662,27 @@ function updateTrayMenu() {
   tray.setContextMenu(contextMenu);
 }
 
+// Register global shortcut to toggle the app window
+function registerGlobalShortcut() {
+  // Register Ctrl+F9 (or Cmd+F9 on macOS) to toggle app visibility
+  const shortcut = 'CommandOrControl+F9';
+  
+  const registered = globalShortcut.register(shortcut, () => {
+    toggleSpotlightWindow();
+  });
+
+  if (!registered) {
+    console.error('Global shortcut registration failed');
+  } else {
+    console.log(`Global shortcut registered: ${shortcut}`);
+  }
+}
+
 // This method will be called when Electron has finished initialization
 app.whenReady().then(() => {
+  // Load settings
+  loadSettings();
+  
   // Initialize database
   db = new ClipboardDatabase();
   console.log('Database initialized with', db.getCount(), 'entries');
@@ -569,6 +696,9 @@ app.whenReady().then(() => {
   
   // Create system tray
   createTray();
+  
+  // Register global shortcut
+  registerGlobalShortcut();
   
   // Start monitoring clipboard
   startClipboardMonitoring();
@@ -597,6 +727,9 @@ app.on('window-all-closed', () => {
 
 // Cleanup tray and database on quit
 app.on('before-quit', () => {
+  // Unregister all global shortcuts
+  globalShortcut.unregisterAll();
+  
   if (tray) {
     tray.destroy();
   }

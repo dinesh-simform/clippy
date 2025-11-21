@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clipsy - Quick Search</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root[data-theme="light"] {
+            --bg-primary: rgba(255, 255, 255, 0.98);
+            --bg-secondary: rgba(248, 250, 252, 0.95);
+            --bg-item: rgba(241, 245, 249, 0.8);
+            --bg-item-hover: rgba(226, 232, 240, 0.9);
+            --bg-item-selected: rgba(59, 130, 246, 0.2);
+            --border-primary: rgba(226, 232, 240, 0.8);
+            --border-selected: rgba(59, 130, 246, 0.6);
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --text-tertiary: #94a3b8;
+            --shadow-primary: rgba(0, 0, 0, 0.1);
+            --shadow-secondary: rgba(0, 0, 0, 0.05);
+            --input-bg: rgba(241, 245, 249, 0.8);
+            --input-focus: rgba(226, 232, 240, 0.9);
+            --scrollbar-track: rgba(226, 232, 240, 0.5);
+            --scrollbar-thumb: rgba(148, 163, 184, 0.5);
+        }
+
+        :root[data-theme="dark"] {
+            --bg-primary: rgba(30, 30, 35, 0.98);
+            --bg-secondary: rgba(255, 255, 255, 0.03);
+            --bg-item: rgba(255, 255, 255, 0.05);
+            --bg-item-hover: rgba(255, 255, 255, 0.1);
+            --bg-item-selected: rgba(59, 130, 246, 0.3);
+            --border-primary: rgba(255, 255, 255, 0.1);
+            --border-selected: rgba(59, 130, 246, 0.6);
+            --text-primary: #ffffff;
+            --text-secondary: rgba(255, 255, 255, 0.6);
+            --text-tertiary: rgba(255, 255, 255, 0.4);
+            --shadow-primary: rgba(0, 0, 0, 0.5);
+            --shadow-secondary: rgba(0, 0, 0, 0.3);
+            --input-bg: rgba(255, 255, 255, 0.08);
+            --input-focus: rgba(255, 255, 255, 0.12);
+            --scrollbar-track: rgba(255, 255, 255, 0.05);
+            --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: transparent;
+            overflow: hidden;
+            -webkit-app-region: drag;
+        }
+
+        .spotlight-container {
+            background: var(--bg-primary);
+            border-radius: 16px;
+            box-shadow: 0 20px 60px var(--shadow-primary), 
+                        0 0 0 1px var(--border-primary);
+            overflow: hidden;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            -webkit-app-region: no-drag;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-primary);
+        }
+
+        .header-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .theme-toggle {
+            background: var(--input-bg);
+            border: 1px solid var(--border-primary);
+            border-radius: 6px;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.2s ease;
+        }
+
+        .theme-toggle:hover {
+            background: var(--input-focus);
+            transform: scale(1.05);
+        }
+
+        .search-container {
+            padding: 20px;
+            border-bottom: 1px solid var(--border-primary);
+            background: var(--bg-secondary);
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 14px 20px;
+            font-size: 18px;
+            border: none;
+            border-radius: 10px;
+            background: var(--input-bg);
+            color: var(--text-primary);
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .search-input:focus {
+            background: var(--input-focus);
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+        }
+
+        .search-input::placeholder {
+            color: var(--text-tertiary);
+        }
+
+        .category-chips {
+            padding: 12px 20px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            border-bottom: 1px solid var(--border-primary);
+            background: var(--bg-secondary);
+            max-height: 80px;
+            overflow-y: auto;
+        }
+
+        .category-chips::-webkit-scrollbar {
+            height: 4px;
+        }
+
+        .category-chips::-webkit-scrollbar-track {
+            background: var(--scrollbar-track);
+        }
+
+        .category-chips::-webkit-scrollbar-thumb {
+            background: var(--scrollbar-thumb);
+            border-radius: 2px;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid var(--border-primary);
+            background: var(--bg-item);
+            color: var(--text-primary);
+        }
+
+        .chip:hover {
+            background: var(--bg-item-hover);
+            transform: translateY(-1px);
+        }
+
+        .chip.active {
+            color: white;
+            border-color: transparent;
+        }
+
+        .chip-icon {
+            font-size: 14px;
+        }
+
+        .results-container {
+            max-height: 350px;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .results-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .results-container::-webkit-scrollbar-track {
+            background: var(--scrollbar-track);
+            border-radius: 4px;
+        }
+
+        .results-container::-webkit-scrollbar-thumb {
+            background: var(--scrollbar-thumb);
+            border-radius: 4px;
+        }
+
+        .results-container::-webkit-scrollbar-thumb:hover {
+            background: var(--scrollbar-thumb);
+            opacity: 0.8;
+        }
+
+        .clipboard-item {
+            padding: 12px 16px;
+            margin-bottom: 6px;
+            background: var(--bg-item);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            border: 1px solid transparent;
+        }
+
+        .clipboard-item:hover {
+            background: var(--bg-item-hover);
+            transform: translateX(4px);
+        }
+
+        .clipboard-item.selected {
+            background: var(--bg-item-selected);
+            border-color: var(--border-selected);
+        }
+
+        .item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .item-title {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .item-time {
+            font-size: 11px;
+            color: var(--text-tertiary);
+        }
+
+        .item-content {
+            color: var(--text-primary);
+            font-size: 14px;
+            line-height: 1.5;
+            word-break: break-word;
+            white-space: pre-wrap;
+            max-height: 60px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .item-badges {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .badge-favorite {
+            background: rgba(255, 193, 7, 0.2);
+            color: #ffc107;
+        }
+
+        .badge-encrypted {
+            background: rgba(76, 175, 80, 0.2);
+            color: #4caf50;
+        }
+
+        .badge-category {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 600;
+            color: white;
+        }
+
+        .no-results {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-tertiary);
+            font-size: 14px;
+        }
+
+        .hint-text {
+            text-align: center;
+            padding: 12px;
+            color: var(--text-tertiary);
+            font-size: 12px;
+            border-top: 1px solid var(--border-primary);
+            background: var(--bg-secondary);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <div class="spotlight-container">
+        <div class="header">
+            <div class="header-title">Clipboard Search</div>
+            <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
+        </div>
+        <div class="search-container">
+            <input 
+                type="text" 
+                class="search-input" 
+                id="searchInput" 
+                placeholder="Search clipboard history..."
+                autofocus
+            />
+        </div>
+        <div class="category-chips" id="categoryChips" style="display: none;">
+            <!-- Category chips will be inserted here -->
+        </div>
+        <div class="results-container" id="resultsContainer">
+            <div class="loading">Loading clipboard items...</div>
+        </div>
+        <div class="hint-text">
+            ↑↓ Navigate • Enter Select • Esc Close • Click 🌙 to toggle theme
+        </div>
+    </div>
+
+    <script>
+        const { ipcRenderer, clipboard } = require('electron');
+        
+        let allEntries = [];
+        let filteredEntries = [];
+        let selectedIndex = 0;
+        let categories = [];
+        let selectedCategories = [];
+        let currentTheme = 'dark';
+
+        // Load theme from IPC
+        async function loadTheme() {
+            const savedTheme = await ipcRenderer.invoke('get-theme-mode');
+            currentTheme = savedTheme || 'dark';
+            applyTheme(currentTheme);
+        }
+
+        // Apply theme
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            document.getElementById('themeToggle').textContent = theme === 'light' ? '🌙' : '☀️';
+        }
+
+        // Toggle theme
+        document.getElementById('themeToggle').addEventListener('click', async () => {
+            currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+            applyTheme(currentTheme);
+            await ipcRenderer.invoke('set-theme-mode', currentTheme);
+        });
+
+        // Load categories
+        async function loadCategories() {
+            categories = await ipcRenderer.invoke('get-all-categories');
+            renderCategoryChips();
+        }
+
+        // Render category chips
+        function renderCategoryChips() {
+            const container = document.getElementById('categoryChips');
+            
+            // Always show (default categories are always available)
+            container.style.display = 'flex';
+            
+            // Default categories
+            const defaultCategories = [
+                { id: 'favorites', name: 'Favorites', icon: '⭐', color: '#ffc107' },
+                { id: 'urls', name: 'URLs', icon: '🔗', color: '#2196f3' },
+                { id: 'emails', name: 'Emails', icon: '📧', color: '#4caf50' },
+                { id: 'code', name: 'Code', icon: '💻', color: '#9c27b0' }
+            ];
+            
+            const allCategories = [...defaultCategories, ...categories];
+            
+            container.innerHTML = allCategories.map(cat => `
+                <div class="chip ${selectedCategories.includes(cat.id) ? 'active' : ''}" 
+                     data-category-id="${cat.id}"
+                     data-category-type="${typeof cat.id === 'number' ? 'custom' : 'default'}"
+                     style="${selectedCategories.includes(cat.id) ? `background: ${cat.color};` : ''}">
+                    <span class="chip-icon">${cat.icon || '📁'}</span>
+                    <span>${cat.name}</span>
+                </div>
+            `).join('');
+
+            // Add click handlers
+            container.querySelectorAll('.chip').forEach(chip => {
+                chip.addEventListener('click', () => {
+                    const catType = chip.dataset.categoryType;
+                    const catId = catType === 'custom' ? parseInt(chip.dataset.categoryId) : chip.dataset.categoryId;
+                    
+                    if (selectedCategories.includes(catId)) {
+                        selectedCategories = selectedCategories.filter(id => id !== catId);
+                    } else {
+                        selectedCategories.push(catId);
+                    }
+                    renderCategoryChips();
+                    filterEntries(document.getElementById('searchInput').value);
+                });
+            });
+        }
+
+        // Format timestamp
+        function formatTime(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = now - date;
+            
+            const minutes = Math.floor(diff / 60000);
+            const hours = Math.floor(diff / 3600000);
+            const days = Math.floor(diff / 86400000);
+            
+            if (minutes < 1) return 'Just now';
+            if (minutes < 60) return `${minutes}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            if (days < 7) return `${days}d ago`;
+            
+            return date.toLocaleDateString();
+        }
+
+        // Truncate text
+        function truncateText(text, maxLength = 150) {
+            if (text.length <= maxLength) return text;
+            return text.substring(0, maxLength) + '...';
+        }
+
+        // Render clipboard items
+        function renderItems() {
+            const container = document.getElementById('resultsContainer');
+            
+            if (filteredEntries.length === 0) {
+                container.innerHTML = '<div class="no-results">No clipboard items found</div>';
+                return;
+            }
+
+            container.innerHTML = filteredEntries.map((entry, index) => {
+                const badges = [];
+                
+                if (entry.is_favorite) {
+                    badges.push('<span class="badge badge-favorite">★ Favorite</span>');
+                }
+                
+                if (entry.is_encrypted) {
+                    badges.push('<span class="badge badge-encrypted">🔒 Encrypted</span>');
+                }
+
+                // Add category badges
+                if (entry.categories && entry.categories.length > 0) {
+                    entry.categories.forEach(cat => {
+                        badges.push(`<span class="badge badge-category" style="background: ${cat.color};">${cat.icon || '📁'} ${cat.name}</span>`);
+                    });
+                }
+
+                const title = entry.custom_name || 'Clipboard Item';
+                
+                return `
+                    <div class="clipboard-item ${index === selectedIndex ? 'selected' : ''}" data-index="${index}">
+                        <div class="item-header">
+                            <div class="item-title">${title}</div>
+                            <div class="item-time">${formatTime(entry.timestamp)}</div>
+                        </div>
+                        <div class="item-content">${truncateText(entry.content)}</div>
+                        ${badges.length > 0 ? `<div class="item-badges">${badges.join('')}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+
+            // Add click handlers
+            container.querySelectorAll('.clipboard-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    const index = parseInt(item.dataset.index);
+                    selectItem(index);
+                });
+            });
+
+            // Scroll selected item into view
+            const selectedItem = container.querySelector('.clipboard-item.selected');
+            if (selectedItem) {
+                selectedItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        }
+
+        // Filter entries based on search and categories
+        function filterEntries(query) {
+            let filtered = [...allEntries];
+            
+            // Category filter (handles both default and custom categories)
+            if (selectedCategories.length > 0) {
+                filtered = filtered.filter(entry => {
+                    return selectedCategories.some(catId => {
+                        // Handle default categories (strings)
+                        if (catId === 'favorites') return entry.is_favorite;
+                        if (catId === 'urls') return /^https?:\/\/.+/i.test(entry.content);
+                        if (catId === 'emails') return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(entry.content);
+                        if (catId === 'code') return /^(function|const|let|var|class|import|export|if|for|while)/.test(entry.content);
+                        // Handle custom categories (numeric IDs)
+                        if (typeof catId === 'number') {
+                            const entryCategoryIds = (entry.categories || []).map(c => c.id);
+                            return entryCategoryIds.includes(catId);
+                        }
+                        return false;
+                    });
+                });
+            }
+            
+            // Search filter
+            if (query && query.trim()) {
+                const lowerQuery = query.toLowerCase();
+                filtered = filtered.filter(entry => {
+                    return entry.content.toLowerCase().includes(lowerQuery) ||
+                           (entry.custom_name && entry.custom_name.toLowerCase().includes(lowerQuery));
+                });
+            }
+            
+            filteredEntries = filtered;
+            selectedIndex = 0;
+            renderItems();
+        }
+
+        // Select and copy item
+        function selectItem(index) {
+            if (index >= 0 && index < filteredEntries.length) {
+                const entry = filteredEntries[index];
+                
+                // If encrypted, we would need to handle decryption
+                if (entry.is_encrypted) {
+                    alert('This item is encrypted. Please decrypt it from the main app.');
+                    return;
+                }
+                
+                clipboard.writeText(entry.content);
+                
+                // Close the spotlight window
+                window.close();
+            }
+        }
+
+        // Navigate selection
+        function navigateSelection(direction) {
+            if (direction === 'up') {
+                selectedIndex = Math.max(0, selectedIndex - 1);
+            } else if (direction === 'down') {
+                selectedIndex = Math.min(filteredEntries.length - 1, selectedIndex + 1);
+            }
+            renderItems();
+        }
+
+        // Load clipboard entries
+        async function loadClipboardEntries() {
+            try {
+                allEntries = await ipcRenderer.invoke('get-entries-with-categories');
+                filteredEntries = [...allEntries];
+                renderItems();
+            } catch (error) {
+                console.error('Error loading clipboard entries:', error);
+                document.getElementById('resultsContainer').innerHTML = 
+                    '<div class="no-results">Error loading clipboard items</div>';
+            }
+        }
+
+        // Keyboard navigation
+        document.getElementById('searchInput').addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                navigateSelection('down');
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                navigateSelection('up');
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                selectItem(selectedIndex);
+            } else if (e.key === 'Escape') {
+                window.close();
+            }
+        });
+
+        // Search input
+        document.getElementById('searchInput').addEventListener('input', (e) => {
+            filterEntries(e.target.value);
+        });
+
+        // Listen for refresh signal
+        ipcRenderer.on('refresh-clipboard-data', () => {
+            loadClipboardEntries();
+            loadCategories();
+            loadTheme();
+            document.getElementById('searchInput').value = '';
+            selectedCategories = [];
+            document.getElementById('searchInput').focus();
+        });
+
+        // Initial load
+        loadTheme();
+        loadCategories();
+        loadClipboardEntries();
+    </script>
+</body>
+</html>
+
+        // Search input
+        document.getElementById('searchInput').addEventListener('input', (e) => {
+            filterEntries(e.target.value);
+        });
+
+        // Listen for refresh signal
+        ipcRenderer.on('refresh-clipboard-data', () => {
+            loadClipboardEntries();
+            document.getElementById('searchInput').value = '';
+            document.getElementById('searchInput').focus();
+        });
+
+        // Initial load
+        loadClipboardEntries();
+    </script>
+</body>
+</html>
