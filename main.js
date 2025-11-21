@@ -34,6 +34,16 @@ let lastClipboardText = ''; // Track last clipboard content
 let mainWindow = null; // Store reference to main window
 let spotlightWindow = null; // Store reference to spotlight window
 let themeMode = 'light'; // Default theme
+let clipboardCheckInterval = null; // Store interval reference
+let lastCheckTime = 0; // Track last check time for debouncing
+
+// Default Configuration (can be changed by user)
+let userSettings = {
+  themeMode: 'light',
+  clipboardCheckInterval: 2000, // Check every 2 seconds
+  minCheckDelay: 500, // Minimum delay between checks (debounce)
+  maxEntries: 1000 // Maximum entries to keep in database
+};
 
 // Get user data path for storing settings
 const userDataPath = app.getPath('userData');
@@ -45,7 +55,14 @@ function loadSettings() {
     if (fs.existsSync(settingsPath)) {
       const data = fs.readFileSync(settingsPath, 'utf8');
       const settings = JSON.parse(data);
-      themeMode = settings.themeMode || 'light';
+      // Merge with defaults to ensure all properties exist
+      userSettings = {
+        themeMode: settings.themeMode || 'light',
+        clipboardCheckInterval: settings.clipboardCheckInterval || 2000,
+        minCheckDelay: settings.minCheckDelay || 500,
+        maxEntries: settings.maxEntries || 1000
+      };
+      themeMode = userSettings.themeMode;
     }
   } catch (error) {
     console.error('Error loading settings:', error);
@@ -55,15 +72,22 @@ function loadSettings() {
 // Save settings
 function saveSettings() {
   try {
-    const settings = { themeMode };
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    fs.writeFileSync(settingsPath, JSON.stringify(userSettings, null, 2));
   } catch (error) {
     console.error('Error saving settings:', error);
   }
 }
 
-// Function to check and update clipboard
+// Function to check and update clipboard with debouncing
 function checkClipboard() {
+  const now = Date.now();
+  
+  // Debounce: Don't check too frequently
+  if (now - lastCheckTime < userSettings.minCheckDelay) {
+    return;
+  }
+  
+  lastCheckTime = now;
   const currentText = clipboard.readText();
   
   // If clipboard has new content, add it to database
@@ -73,12 +97,20 @@ function checkClipboard() {
   }
 }
 
-// Start monitoring clipboard
+// Start monitoring clipboard with optimized interval
 function startClipboardMonitoring() {
-  // Check clipboard every 1 second
-  setInterval(() => {
-    checkClipboard();
-  }, 1000);
+  // Clear any existing interval
+  if (clipboardCheckInterval) {
+    clearInterval(clipboardCheckInterval);
+  }
+  
+  // Check clipboard at configured interval
+  clipboardCheckInterval = setInterval(() => {
+    // Only check if app is not suspended
+    if (!app.isHidden || app.isHidden()) {
+      checkClipboard();
+    }
+  }, userSettings.clipboardCheckInterval);
   
   // Also check when tray menu is opened
   if (tray) {
@@ -88,7 +120,15 @@ function startClipboardMonitoring() {
   }
 }
 
-// Function to add text to clipboard history
+// Stop monitoring (for cleanup)
+function stopClipboardMonitoring() {
+  if (clipboardCheckInterval) {
+    clearInterval(clipboardCheckInterval);
+    clipboardCheckInterval = null;
+  }
+}
+
+// Function to add text to clipboard history with optimization
 /**
  * Add to clipboard history
  * @param {string} text
@@ -96,10 +136,47 @@ function startClipboardMonitoring() {
  */
 function addToClipboardHistory(text, opts = { encrypt: false, password: '' }) {
   if (!text || !text.trim() || !db) return;
+  
+  // Add entry
   db.addEntry(text, opts);
+  
+  // Cleanup old entries if exceeding limit (run async to not block)
+  setImmediate(() => {
+    const count = db.getCount();
+    if (count > userSettings.maxEntries) {
+      cleanupOldEntries();
+    }
+  });
+  
   updateTrayMenu();
   if (mainWindow && mainWindow.webContents) {
     mainWindow.webContents.send('clipboard-updated');
+  }
+}
+
+// Cleanup old entries to maintain performance
+function cleanupOldEntries() {
+  if (!db) return;
+  
+  try {
+    const count = db.getCount();
+    if (count > userSettings.maxEntries) {
+      const entriesToDelete = count - userSettings.maxEntries;
+      // Delete oldest non-favorite entries
+      const stmt = db.db.prepare(`
+        DELETE FROM clipboard_entries 
+        WHERE id IN (
+          SELECT id FROM clipboard_entries 
+          WHERE is_favorite = 0 
+          ORDER BY timestamp ASC 
+          LIMIT ?
+        )
+      `);
+      stmt.run(entriesToDelete);
+      console.log(`Cleaned up ${entriesToDelete} old entries. Current count: ${db.getCount()}`);
+    }
+  } catch (error) {
+    console.error('Error cleaning up old entries:', error);
   }
 }
   // Add entry with encryption support (from renderer)
@@ -109,24 +186,46 @@ function addToClipboardHistory(text, opts = { encrypt: false, password: '' }) {
     return db.addEntry(text, opts);
   });
 
+// Cache for frequently accessed data
+let entriesCache = null;
+let cacheTimestamp = 0;
+const CACHE_DURATION = 5000; // Cache for 5 seconds
+
+// Function to invalidate cache
+function invalidateCache() {
+  entriesCache = null;
+  cacheTimestamp = 0;
+}
+
 // Function to truncate text with ellipsis
 function truncateText(text, maxLength = 50) {
   if (text.length <= maxLength) return text;
   return text.substring(0, maxLength) + '...';
 }
 
-// Setup IPC handlers for renderer communication
+// Setup IPC handlers for renderer communication with optimizations
 function setupIPC() {
-  // Get all clipboard entries
+  // Get all clipboard entries with caching
   ipcMain.handle('get-clipboard-entries', async () => {
     if (!db) return [];
-    return db.getAllEntries();
+    
+    const now = Date.now();
+    if (entriesCache && (now - cacheTimestamp) < CACHE_DURATION) {
+      return entriesCache;
+    }
+    
+    const entries = db.getAllEntries();
+    entriesCache = entries;
+    cacheTimestamp = now;
+    return entries;
   });
   
-  // Get recent entries
-  ipcMain.handle('get-recent-entries', async (event, limit = 50) => {
+  // Get recent entries with limit
+  ipcMain.handle('get-recent-entries', async (event, limit = 100) => {
     if (!db) return [];
-    return db.getRecentEntries(limit);
+    // Cap the limit to prevent excessive queries
+    const cappedLimit = Math.min(limit, 200);
+    return db.getRecentEntries(cappedLimit);
   });
   
   // Search entries
@@ -149,6 +248,7 @@ function setupIPC() {
   // Delete entry
   ipcMain.handle('delete-entry', async (event, id) => {
     if (!db) return false;
+    invalidateCache(); // Invalidate cache on delete
     const result = db.deleteEntry(id);
     if (mainWindow) {
       mainWindow.webContents.send('clipboard-updated');
@@ -159,6 +259,7 @@ function setupIPC() {
   // Toggle favorite
   ipcMain.handle('toggle-favorite', async (event, id) => {
     if (!db) return false;
+    invalidateCache(); // Invalidate cache
     const result = db.toggleFavorite(id);
     if (mainWindow) {
       mainWindow.webContents.send('clipboard-updated');
@@ -169,6 +270,7 @@ function setupIPC() {
   // Update custom name
   ipcMain.handle('update-custom-name', async (event, id, name) => {
     if (!db) return false;
+    invalidateCache(); // Invalidate cache
     return db.updateCustomName(id, name);
   });
   
@@ -181,6 +283,7 @@ function setupIPC() {
   // Clear all entries
   ipcMain.handle('clear-all-entries', async () => {
     if (!db) return false;
+    invalidateCache(); // Invalidate cache
     return db.clearAll();
   });
 
@@ -248,6 +351,58 @@ function setupIPC() {
   ipcMain.handle('get-entries-by-date-range', async (event, startTimestamp, endTimestamp) => {
     if (!db) return [];
     return db.getEntriesByDateRange(startTimestamp, endTimestamp);
+  });
+
+  // ===== SETTINGS MANAGEMENT =====
+
+  // Get all user settings
+  ipcMain.handle('get-settings', async () => {
+    return {
+      clipboardCheckInterval: userSettings.clipboardCheckInterval,
+      minCheckDelay: userSettings.minCheckDelay,
+      maxEntries: userSettings.maxEntries
+    };
+  });
+
+  // Update settings
+  ipcMain.handle('update-settings', async (event, newSettings) => {
+    try {
+      // Validate and update settings
+      if (newSettings.clipboardCheckInterval !== undefined) {
+        const interval = parseInt(newSettings.clipboardCheckInterval);
+        if (interval >= 1000 && interval <= 60000) { // Between 1s and 60s
+          userSettings.clipboardCheckInterval = interval;
+        }
+      }
+      
+      if (newSettings.minCheckDelay !== undefined) {
+        const delay = parseInt(newSettings.minCheckDelay);
+        if (delay >= 100 && delay <= 5000) { // Between 0.1s and 5s
+          userSettings.minCheckDelay = delay;
+        }
+      }
+      
+      if (newSettings.maxEntries !== undefined) {
+        const max = parseInt(newSettings.maxEntries);
+        if (max >= 100 && max <= 10000) { // Between 100 and 10000
+          userSettings.maxEntries = max;
+        }
+      }
+      
+      // Save to disk
+      saveSettings();
+      
+      // Restart clipboard monitoring with new interval if changed
+      if (newSettings.clipboardCheckInterval !== undefined) {
+        stopClipboardMonitoring();
+        startClipboardMonitoring();
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Error updating settings:', error);
+      return false;
+    }
   });
 
   // Theme management
@@ -375,17 +530,33 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    show: false, // Don't show until ready
+    icon: path.join(__dirname, 'assets', 'clipsy-icon-textonly-theme.png'),
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false
+      contextIsolation: false,
+      backgroundThrottling: false // Prevent throttling when hidden
     }
   });
 
   // Load the index.html file
   mainWindow.loadFile('index.html');
 
+  // Show window when ready to prevent flickering
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+  });
+
   // Open DevTools in development (optional)
   // mainWindow.webContents.openDevTools();
+  
+  // Optimize memory when window is hidden
+  mainWindow.on('hide', () => {
+    if (mainWindow && mainWindow.webContents) {
+      // Clear any pending timers/operations
+      mainWindow.webContents.send('window-hidden');
+    }
+  });
   
   // Clear reference when window is closed
   mainWindow.on('closed', () => {
@@ -393,8 +564,13 @@ function createWindow() {
   });
 }
 
-// Create spotlight window
+// Create spotlight window (lazy initialization)
 function createSpotlightWindow() {
+  // Return existing window if already created
+  if (spotlightWindow && !spotlightWindow.isDestroyed()) {
+    return;
+  }
+  
   const { screen } = require('electron');
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
@@ -410,9 +586,11 @@ function createSpotlightWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     show: false,
+    icon: path.join(__dirname, 'assets', 'clipsy-icon-textonly-theme.png'),
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false
+      contextIsolation: false,
+      backgroundThrottling: false
     }
   });
 
@@ -437,17 +615,19 @@ function createSpotlightWindow() {
   });
 }
 
-// Toggle spotlight window
+// Toggle spotlight window with lazy creation
 function toggleSpotlightWindow() {
-  if (!spotlightWindow) {
+  if (!spotlightWindow || spotlightWindow.isDestroyed()) {
     createSpotlightWindow();
   }
 
   if (spotlightWindow.isVisible()) {
     spotlightWindow.hide();
   } else {
-    // Refresh data before showing
-    spotlightWindow.webContents.send('refresh-clipboard-data');
+    // Refresh data before showing (only when becoming visible)
+    if (spotlightWindow.webContents) {
+      spotlightWindow.webContents.send('refresh-clipboard-data');
+    }
     spotlightWindow.show();
     spotlightWindow.focus();
   }
@@ -683,6 +863,12 @@ app.whenReady().then(() => {
   // Load settings
   loadSettings();
   
+  // Set app icon for dock/taskbar (macOS/Windows/Linux)
+  const appIcon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'clipsy-icon-textonly-theme.png'));
+  if (process.platform === 'darwin') {
+    app.dock.setIcon(appIcon);
+  }
+  
   // Initialize database
   db = new ClipboardDatabase();
   console.log('Database initialized with', db.getCount(), 'entries');
@@ -727,14 +913,41 @@ app.on('window-all-closed', () => {
 
 // Cleanup tray and database on quit
 app.on('before-quit', () => {
+  console.log('Application quitting, cleaning up...');
+  
+  // Stop clipboard monitoring
+  stopClipboardMonitoring();
+  
   // Unregister all global shortcuts
   globalShortcut.unregisterAll();
   
+  // Invalidate cache
+  invalidateCache();
+  
+  // Destroy tray
   if (tray) {
     tray.destroy();
+    tray = null;
   }
+  
+  // Close database
   if (db) {
     db.close();
+    db = null;
     console.log('Database connection closed');
   }
+  
+  // Destroy windows
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.destroy();
+  }
+  if (spotlightWindow && !spotlightWindow.isDestroyed()) {
+    spotlightWindow.destroy();
+  }
+});
+
+// Handle app suspension (reduce resource usage)
+app.on('browser-window-blur', () => {
+  // When all windows lose focus, we can reduce activity
+  invalidateCache();
 });

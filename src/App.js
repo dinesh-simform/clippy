@@ -1,5 +1,5 @@
   
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Switch,
   FormControlLabel,
@@ -13,6 +13,7 @@ import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
+import SettingsIcon from '@mui/icons-material/Settings';
 import {
   Box,
   CssBaseline,
@@ -38,6 +39,7 @@ import ClipboardList from './components/ClipboardList';
 import DateFilter from './components/DateFilter';
 import CategoryManager from './components/CategoryManager';
 import CategorySelector from './components/CategorySelector';
+import Settings from './components/Settings';
 
 const { ipcRenderer } = window.require('electron');
 
@@ -139,6 +141,8 @@ function App() {
   const [masterDialogOpen, setMasterDialogOpen] = useState(false);
   const [masterInput, setMasterInput] = useState('');
   const [showMasterPassword, setShowMasterPassword] = useState(false);
+  // Settings dialog state
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Create theme based on mode
   const theme = useMemo(() => createAppTheme(themeMode), [themeMode]);
@@ -152,25 +156,25 @@ function App() {
     loadTheme();
   }, []);
 
-  // Toggle theme
-  const handleThemeToggle = async () => {
+  // Toggle theme (memoized)
+  const handleThemeToggle = useCallback(async () => {
     const newMode = themeMode === 'light' ? 'dark' : 'light';
     setThemeMode(newMode);
     await ipcRenderer.invoke('set-theme-mode', newMode);
-  };
+  }, [themeMode]);
 
-  // Load categories
-  const loadCategories = async () => {
+  // Load categories (memoized)
+  const loadCategories = useCallback(async () => {
     const cats = await ipcRenderer.invoke('get-all-categories');
     setCategories(cats);
-  };
+  }, []);
 
   useEffect(() => {
     loadCategories();
     const handleCategoriesUpdate = () => loadCategories();
     window.addEventListener('categories-updated', handleCategoriesUpdate);
     return () => window.removeEventListener('categories-updated', handleCategoriesUpdate);
-  }, []);
+  }, [loadCategories]);
 
   // Handler to save master password
   const handleSaveMasterPassword = () => {
@@ -196,17 +200,17 @@ function App() {
     fetchEntries();
     setSnackbar({ open: true, message: encryptEntry ? 'Encrypted entry added!' : 'Entry added!', severity: 'success' });
   };
-  // Fetch clipboard entries
-  const fetchEntries = async () => {
+  // Fetch clipboard entries (memoized)
+  const fetchEntries = useCallback(async () => {
     setLoading(true);
     let allEntries = await ipcRenderer.invoke('get-entries-with-categories');
     setEntries(allEntries);
-    filterEntries(allEntries, selectedCategory, searchQuery, dateRange);
+    filterEntries(allEntries, selectedCategory, searchQuery, dateRange, selectedCategoryChips);
     setLoading(false);
-  };
+  }, [selectedCategory, searchQuery, dateRange, selectedCategoryChips]);
 
-  // Filter entries based on category, search, and date
-  const filterEntries = (allEntries, category, query, range, chipFilters = []) => {
+  // Filter entries based on category, search, and date (memoized)
+  const filterEntries = useCallback((allEntries, category, query, range, chipFilters = []) => {
     let filtered = [...allEntries];
     // Category filter from sidebar
     if (category === 'favorites') filtered = filtered.filter(e => e.is_favorite);
@@ -258,15 +262,15 @@ function App() {
       filtered = filtered.filter(e => e.timestamp >= start && e.timestamp <= end);
     }
     setFilteredEntries(filtered);
-  };
+  }, []);
 
-  useEffect(() => { fetchEntries(); }, []);
-  useEffect(() => { filterEntries(entries, selectedCategory, searchQuery, dateRange, selectedCategoryChips); }, [selectedCategory, searchQuery, dateRange, entries, selectedCategoryChips]);
+  useEffect(() => { fetchEntries(); }, [fetchEntries]);
+  useEffect(() => { filterEntries(entries, selectedCategory, searchQuery, dateRange, selectedCategoryChips); }, [filterEntries, entries, selectedCategory, searchQuery, dateRange, selectedCategoryChips]);
   useEffect(() => {
     const handleUpdate = () => fetchEntries();
     ipcRenderer.on('clipboard-updated', handleUpdate);
     return () => ipcRenderer.removeListener('clipboard-updated', handleUpdate);
-  }, []);
+  }, [fetchEntries]);
 
   // Handlers
   const handleSearchChange = (query) => setSearchQuery(query);
@@ -295,6 +299,9 @@ function App() {
             </Typography>
             <IconButton onClick={handleThemeToggle} color="primary" sx={{ mr: 1 }}>
               {themeMode === 'light' ? <DarkModeIcon /> : <LightModeIcon />}
+            </IconButton>
+            <IconButton onClick={() => setSettingsOpen(true)} color="primary" sx={{ mr: 1 }}>
+              <SettingsIcon />
             </IconButton>
             <Button
               variant="outlined"
@@ -592,6 +599,8 @@ function App() {
         <CategoryManager open={categoryManagerOpen} onClose={() => setCategoryManagerOpen(false)} onCategoriesChanged={handleCategoriesChanged} />
         {/* Category Selector Dialog */}
         <CategorySelector open={categorySelector.open} onClose={handleCategorySelectorClose} entryId={categorySelector.entryId} currentCategories={categorySelector.categories} onCategoriesUpdated={handleCategorySelectorUpdated} />
+        {/* Settings Dialog */}
+        <Settings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       </Box>
     </ThemeProvider>
   );
