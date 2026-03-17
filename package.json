@@ -54,6 +54,7 @@
     "copyright": "Copyright © 2025 Clipsy",
     "files": [
       "main.js",
+      "ai-service.js",
       "database.js",
       "create-icon.js",
       "index.html",

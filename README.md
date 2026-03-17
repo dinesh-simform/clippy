@@ -51,6 +51,7 @@
 - 🏷️ **Custom Categories** - Create and manage your own categories with colors and icons
 - � **Full-Text Search** - Search across all clipboard content
 - 🎯 **Category Filters** - Filter by Favorites, URLs, Emails, Code, or custom categories
+- 🤖 **AI Assistant (Phase 1)** - Summarize, rewrite, and chat over clipboard content
 - ⚙️ **Configurable Settings** - Customize monitoring interval, max entries, and debounce delay
 - 🧹 **Auto-Cleanup** - Automatically removes old entries (keeps favorites)
 - 💾 **Export/Import** - Backup and restore your clipboard history
@@ -173,6 +174,17 @@ Click the Settings icon (⚙️) to customize:
 - Check Interval: 2000ms (2 seconds)
 - Check Delay: 500ms (0.5 seconds)
 - Max Entries: 1000 entries
+
+### AI Settings (Phase 1)
+
+Open **Settings** and configure **AI Settings (Phase 1)**:
+
+- Enable AI features
+- Choose provider: Azure OpenAI, OpenAI, or custom OpenAI-compatible
+- Enter endpoint/deployment/key (Azure) or model/key (OpenAI)
+- Use AI from:
+  - Main toolbar: **AI Assistant**
+  - Entry actions: **Summarize** and **Rewrite**
 
 ## 🏗️ Building from Source
 
@@ -486,6 +498,7 @@ npm run dist:linux    # Creates AppImage and DEB
 - **[BUILD_SUMMARY.md](BUILD_SUMMARY.md)** - Build status and details
 - **[USER_SETTINGS_IMPLEMENTATION.md](USER_SETTINGS_IMPLEMENTATION.md)** - Settings system documentation
 - **[SQLITE_INTEGRATION.md](SQLITE_INTEGRATION.md)** - Database documentation
+- **[AI_INTEGRATION.md](AI_INTEGRATION.md)** - Phase 1 AI integration guide
 
 ## 🤝 Contributing
 

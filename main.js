@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { createTrayIcon } = require('./create-icon');
 const ClipboardDatabase = require('./database');
+const { createAIService, mergeAISettings } = require('./ai-service');
 
 // Single instance lock - prevent multiple instances
 const gotTheLock = app.requestSingleInstanceLock();
@@ -36,13 +37,15 @@ let spotlightWindow = null; // Store reference to spotlight window
 let themeMode = 'light'; // Default theme
 let clipboardCheckInterval = null; // Store interval reference
 let lastCheckTime = 0; // Track last check time for debouncing
+let aiService = null;
 
 // Default Configuration (can be changed by user)
 let userSettings = {
   themeMode: 'light',
   clipboardCheckInterval: 2000, // Check every 2 seconds
   minCheckDelay: 500, // Minimum delay between checks (debounce)
-  maxEntries: 1000 // Maximum entries to keep in database
+  maxEntries: 1000, // Maximum entries to keep in database
+  ai: mergeAISettings({})
 };
 
 // Get user data path for storing settings
@@ -60,7 +63,8 @@ function loadSettings() {
         themeMode: settings.themeMode || 'light',
         clipboardCheckInterval: settings.clipboardCheckInterval || 2000,
         minCheckDelay: settings.minCheckDelay || 500,
-        maxEntries: settings.maxEntries || 1000
+        maxEntries: settings.maxEntries || 1000,
+        ai: mergeAISettings(settings.ai || {})
       };
       themeMode = userSettings.themeMode;
     }
@@ -384,7 +388,8 @@ function setupIPC() {
     return {
       clipboardCheckInterval: userSettings.clipboardCheckInterval,
       minCheckDelay: userSettings.minCheckDelay,
-      maxEntries: userSettings.maxEntries
+      maxEntries: userSettings.maxEntries,
+      ai: mergeAISettings(userSettings.ai || {})
     };
   });
 
@@ -412,6 +417,10 @@ function setupIPC() {
           userSettings.maxEntries = max;
         }
       }
+
+      if (newSettings.ai !== undefined) {
+        userSettings.ai = mergeAISettings(newSettings.ai || {});
+      }
       
       // Save to disk
       saveSettings();
@@ -426,6 +435,108 @@ function setupIPC() {
     } catch (error) {
       console.error('Error updating settings:', error);
       return false;
+    }
+  });
+
+  // ===== AI INTEGRATION =====
+
+  ipcMain.handle('ai-get-status', async () => {
+    if (!aiService) {
+      return {
+        enabled: false,
+        configured: false,
+        provider: 'azure-openai'
+      };
+    }
+    return aiService.getStatus();
+  });
+
+  ipcMain.handle('ai-summarize-entry', async (event, entryId) => {
+    try {
+      if (!db || !aiService) return { success: false, error: 'AI is unavailable.' };
+      const entry = db.getEntry(entryId);
+      if (!entry) return { success: false, error: 'Entry not found.' };
+      if (entry.is_encrypted) {
+        return { success: false, error: 'Encrypted entries cannot be summarized directly.' };
+      }
+
+      const result = await aiService.summarize(entry.content);
+      return { success: true, data: result };
+    } catch (error) {
+      return { success: false, error: error.message || 'Summarization failed.' };
+    }
+  });
+
+  ipcMain.handle('ai-rewrite-entry', async (event, entryId, style) => {
+    try {
+      if (!db || !aiService) return { success: false, error: 'AI is unavailable.' };
+      const entry = db.getEntry(entryId);
+      if (!entry) return { success: false, error: 'Entry not found.' };
+      if (entry.is_encrypted) {
+        return { success: false, error: 'Encrypted entries cannot be rewritten directly.' };
+      }
+
+      const result = await aiService.rewrite(entry.content, style);
+      return { success: true, data: result };
+    } catch (error) {
+      return { success: false, error: error.message || 'Rewrite failed.' };
+    }
+  });
+
+  ipcMain.handle('ai-chat', async (event, messages = [], contextEntryIds = []) => {
+    try {
+      if (!aiService) return { success: false, error: 'AI is unavailable.' };
+
+      const safeMessages = Array.isArray(messages) ? messages.slice(-20) : [];
+      let contextPrefix = '';
+
+      if (db && Array.isArray(contextEntryIds) && contextEntryIds.length > 0) {
+        const contextParts = contextEntryIds.slice(0, 5).map((entryId) => {
+          const entry = db.getEntry(entryId);
+          if (!entry || entry.is_encrypted) return null;
+          return `- ${entry.content.slice(0, 1200)}`;
+        }).filter(Boolean);
+
+        if (contextParts.length > 0) {
+          contextPrefix = `Clipboard context (for reference):\n${contextParts.join('\n')}`;
+        }
+      }
+
+      const enrichedMessages = contextPrefix
+        ? [{ role: 'system', content: contextPrefix }, ...safeMessages]
+        : safeMessages;
+
+      const result = await aiService.chat(enrichedMessages);
+      return { success: true, data: result };
+    } catch (error) {
+      return { success: false, error: error.message || 'Chat failed.' };
+    }
+  });
+
+  // AI suggest tags for an entry
+  ipcMain.handle('ai-suggest-tags', async (event, entryId) => {
+    try {
+      if (!db || !aiService) return { success: false, error: 'AI unavailable' };
+      const entry = db.getEntry(entryId);
+      if (!entry) return { success: false, error: 'Entry not found' };
+      if (entry.is_encrypted) return { success: false, error: 'Decrypt entry first' };
+
+      const result = await aiService.suggestTags(entry.content);
+      return { success: true, suggestions: result.tags || [], raw: result.raw };
+    } catch (error) {
+      return { success: false, error: error.message || 'Tag suggestion failed' };
+    }
+  });
+
+  // Persist tags for an entry
+  ipcMain.handle('set-entry-tags', async (event, entryId, tags = []) => {
+    try {
+      if (!db) return { success: false, error: 'DB unavailable' };
+      const ok = db.setEntryTags(entryId, tags);
+      if (mainWindow) mainWindow.webContents.send('clipboard-updated');
+      return { success: !!ok };
+    } catch (error) {
+      return { success: false, error: error.message || 'Failed to set tags' };
     }
   });
 
@@ -561,13 +672,6 @@ const menuTemplate = [
           });
         }
       },
-      {
-        label: 'Learn More',
-        click: async () => {
-          const { shell } = require('electron');
-          await shell.openExternal('https://electronjs.org');
-        }
-      }
     ]
   }
 ];
@@ -919,6 +1023,9 @@ app.whenReady().then(() => {
   // Initialize database
   db = new ClipboardDatabase();
   console.log('Database initialized with', db.getCount(), 'entries');
+
+  // Initialize AI service
+  aiService = createAIService(() => userSettings.ai || {});
   
   // Setup IPC handlers
   setupIPC();

@@ -2,7 +2,7 @@ import React from 'react';
 import { Box, Typography, CircularProgress } from '@mui/material';
 import EntryCard from './EntryCard';
 
-function ClipboardList({ entries, loading, onCopy, onDelete, onToggleFavorite, onManageCategories, masterPassword }) {
+function ClipboardList({ entries, loading, onCopy, onDelete, onToggleFavorite, onManageCategories, onAISummarize, onAIRewrite, masterPassword }) {
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
@@ -33,6 +33,8 @@ function ClipboardList({ entries, loading, onCopy, onDelete, onToggleFavorite, o
           onDelete={onDelete}
           onToggleFavorite={onToggleFavorite}
           onManageCategories={onManageCategories}
+          onAISummarize={onAISummarize}
+          onAIRewrite={onAIRewrite}
           masterPassword={masterPassword}
         />
       ))}

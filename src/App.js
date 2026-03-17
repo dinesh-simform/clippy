@@ -15,6 +15,8 @@ import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import SettingsIcon from '@mui/icons-material/Settings';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
+import SendIcon from '@mui/icons-material/Send';
 import {
   Box,
   CssBaseline,
@@ -43,7 +45,7 @@ import CategoryManager from './components/CategoryManager';
 import CategorySelector from './components/CategorySelector';
 import Settings from './components/Settings';
 
-const { ipcRenderer } = window.require('electron');
+const { ipcRenderer, clipboard } = window.require('electron');
 
 // Create theme function based on mode
 const createAppTheme = (mode) => createTheme({
@@ -151,6 +153,12 @@ function App() {
   const [showMasterPassword, setShowMasterPassword] = useState(false);
   // Settings dialog state
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aiDialogOpen, setAiDialogOpen] = useState(false);
+  const [aiInput, setAiInput] = useState('');
+  const [aiMessages, setAiMessages] = useState([]);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiContextEntryIds, setAiContextEntryIds] = useState([]);
+  const [aiResultDialog, setAiResultDialog] = useState({ open: false, title: '', content: '' });
   const latestFetchIdRef = useRef(0);
 
   // Create theme based on mode
@@ -295,6 +303,111 @@ function App() {
   const handleCategorySelectorUpdated = () => { handleCategorySelectorClose(); fetchEntries(); };
   const handlePageChange = (event, newPage) => setPage(newPage);
 
+  const ensureAIReady = async () => {
+    const status = await ipcRenderer.invoke('ai-get-status');
+    if (!status.enabled) {
+      setSnackbar({ open: true, message: 'AI is disabled. Enable it in Settings.', severity: 'error' });
+      return false;
+    }
+    if (!status.configured) {
+      setSnackbar({ open: true, message: 'AI is not configured. Add provider credentials in Settings.', severity: 'error' });
+      return false;
+    }
+    return true;
+  };
+
+  const handleOpenAIAssistant = async (contextIds = []) => {
+    const ready = await ensureAIReady();
+    if (!ready) return;
+
+    setAiContextEntryIds(Array.isArray(contextIds) ? contextIds : []);
+    setAiDialogOpen(true);
+    if (aiMessages.length === 0) {
+      setAiMessages([
+        {
+          role: 'assistant',
+          content: 'AI Assistant is ready. Ask about selected clips, summaries, rewrites, or drafting help.'
+        }
+      ]);
+    }
+  };
+
+  const handleSendAIMessage = async () => {
+    const trimmed = aiInput.trim();
+    if (!trimmed || aiBusy) return;
+
+    const userMessage = { role: 'user', content: trimmed };
+    const nextMessages = [...aiMessages, userMessage];
+    setAiMessages(nextMessages);
+    setAiInput('');
+    setAiBusy(true);
+
+    try {
+      const response = await ipcRenderer.invoke('ai-chat', nextMessages, aiContextEntryIds);
+      if (!response.success) {
+        setSnackbar({ open: true, message: response.error || 'AI chat failed', severity: 'error' });
+        return;
+      }
+
+      setAiMessages((prev) => [...prev, { role: 'assistant', content: response.data.text }]);
+    } catch (error) {
+      setSnackbar({ open: true, message: 'AI chat failed', severity: 'error' });
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const handleAISummarize = async (entry) => {
+    const ready = await ensureAIReady();
+    if (!ready) return;
+
+    try {
+      const response = await ipcRenderer.invoke('ai-summarize-entry', entry.id);
+      if (!response.success) {
+        setSnackbar({ open: true, message: response.error || 'Summarization failed', severity: 'error' });
+        return;
+      }
+      setAiResultDialog({
+        open: true,
+        title: 'AI Summary',
+        content: response.data.text
+      });
+    } catch (error) {
+      setSnackbar({ open: true, message: 'Summarization failed', severity: 'error' });
+    }
+  };
+
+  const handleAIRewrite = async (entry) => {
+    const ready = await ensureAIReady();
+    if (!ready) return;
+
+    try {
+      const response = await ipcRenderer.invoke('ai-rewrite-entry', entry.id, 'concise and professional');
+      if (!response.success) {
+        setSnackbar({ open: true, message: response.error || 'Rewrite failed', severity: 'error' });
+        return;
+      }
+      setAiResultDialog({
+        open: true,
+        title: 'AI Rewrite',
+        content: response.data.text
+      });
+    } catch (error) {
+      setSnackbar({ open: true, message: 'Rewrite failed', severity: 'error' });
+    }
+  };
+
+  const handleUseAIResultAsEntry = async () => {
+    if (!aiResultDialog.content.trim()) return;
+    await ipcRenderer.invoke('add-entry', aiResultDialog.content, {
+      encrypt: false,
+      password: '',
+      title: 'AI Generated'
+    });
+    fetchEntries();
+    setSnackbar({ open: true, message: 'AI output added as a new entry', severity: 'success' });
+  };
+
   return (
     <ThemeProvider theme={theme}>
       <Box sx={{ display: 'flex' }}>
@@ -360,6 +473,14 @@ function App() {
               onClick={() => setAddDialogOpen(true)}
             >
               Add Entry
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<SmartToyIcon />}
+              sx={{ mr: 2 }}
+              onClick={() => handleOpenAIAssistant([])}
+            >
+              AI Assistant
             </Button>
             <Button
               variant="outlined"
@@ -582,6 +703,8 @@ function App() {
               onDelete={handleDelete}
               onToggleFavorite={handleToggleFavorite}
               onManageCategories={handleAssignCategories}
+              onAISummarize={handleAISummarize}
+              onAIRewrite={handleAIRewrite}
               masterPassword={masterPassword}
             />
             {totalPages > 1 && (
@@ -610,6 +733,97 @@ function App() {
             <Button onClick={handleClearAll} variant="contained" color="error">Clear All</Button>
           </DialogActions>
         </Dialog>
+
+        <Dialog
+          open={aiDialogOpen}
+          onClose={() => setAiDialogOpen(false)}
+          maxWidth="md"
+          fullWidth
+          PaperProps={{ sx: { borderRadius: 3 } }}
+        >
+          <DialogTitle>AI Assistant</DialogTitle>
+          <DialogContent>
+            <Typography variant="caption" color="text.secondary">
+              {aiContextEntryIds.length > 0
+                ? `Using ${aiContextEntryIds.length} clipboard item(s) as context.`
+                : 'No explicit clipboard context selected.'}
+            </Typography>
+            <Box sx={{ mt: 1.5, maxHeight: 320, overflowY: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}>
+              {aiMessages.length === 0 && (
+                <Typography variant="body2" color="text.secondary">Start a conversation with your clipboard assistant.</Typography>
+              )}
+              {aiMessages.map((message, index) => (
+                <Box
+                  key={`${message.role}-${index}`}
+                  sx={{
+                    mb: 1,
+                    p: 1,
+                    borderRadius: 1.5,
+                    bgcolor: message.role === 'assistant' ? 'background.default' : 'primary.lighter'
+                  }}
+                >
+                  <Typography variant="caption" sx={{ fontWeight: 600, textTransform: 'uppercase' }}>
+                    {message.role}
+                  </Typography>
+                  <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{message.content}</Typography>
+                </Box>
+              ))}
+            </Box>
+            <TextField
+              fullWidth
+              multiline
+              minRows={2}
+              maxRows={6}
+              label="Ask AI about your clipboard"
+              value={aiInput}
+              onChange={(e) => setAiInput(e.target.value)}
+              sx={{ mt: 2 }}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setAiDialogOpen(false)}>Close</Button>
+            <Button
+              variant="contained"
+              startIcon={<SendIcon />}
+              onClick={handleSendAIMessage}
+              disabled={aiBusy || !aiInput.trim()}
+            >
+              {aiBusy ? 'Sending...' : 'Send'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        <Dialog
+          open={aiResultDialog.open}
+          onClose={() => setAiResultDialog({ open: false, title: '', content: '' })}
+          maxWidth="md"
+          fullWidth
+          PaperProps={{ sx: { borderRadius: 3 } }}
+        >
+          <DialogTitle>{aiResultDialog.title}</DialogTitle>
+          <DialogContent>
+            <TextField
+              multiline
+              minRows={8}
+              fullWidth
+              value={aiResultDialog.content}
+              onChange={(e) => setAiResultDialog((prev) => ({ ...prev, content: e.target.value }))}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button
+              onClick={() => {
+                clipboard.writeText(aiResultDialog.content || '');
+                setSnackbar({ open: true, message: 'AI output copied to clipboard', severity: 'success' });
+              }}
+            >
+              Copy
+            </Button>
+            <Button onClick={handleUseAIResultAsEntry} variant="outlined">Add As Entry</Button>
+            <Button onClick={() => setAiResultDialog({ open: false, title: '', content: '' })} variant="contained">Done</Button>
+          </DialogActions>
+        </Dialog>
+
         {/* Snackbar for notifications */}
         <Snackbar open={snackbar.open} autoHideDuration={3000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
           <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%', boxShadow: 'none', border: '1px solid', borderColor: snackbar.severity === 'success' ? 'success.main' : 'error.main' }}>{snackbar.message}</Alert>

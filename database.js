@@ -81,6 +81,14 @@ class ClipboardDatabase {
       CREATE INDEX IF NOT EXISTS idx_custom_name ON clipboard_entries(custom_name);
       CREATE INDEX IF NOT EXISTS idx_entry_categories_entry ON entry_categories(entry_id);
       CREATE INDEX IF NOT EXISTS idx_entry_categories_category ON entry_categories(category_id);
+      CREATE TABLE IF NOT EXISTS ai_entry_metadata (
+        entry_id INTEGER PRIMARY KEY,
+        tags TEXT DEFAULT '[]',
+        summary TEXT,
+        updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+        FOREIGN KEY (entry_id) REFERENCES clipboard_entries(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_ai_entry_tags ON ai_entry_metadata(entry_id);
     `);
 
     console.log('Database initialized successfully');
@@ -405,6 +413,36 @@ class ClipboardDatabase {
     }
   }
 
+  // Tags / AI metadata helpers
+  getEntryTags(entryId) {
+    try {
+      const stmt = this.db.prepare(`SELECT tags FROM ai_entry_metadata WHERE entry_id = ?`);
+      const row = stmt.get(entryId);
+      if (!row || !row.tags) return [];
+      try { return JSON.parse(row.tags); } catch (e) { return []; }
+    } catch (error) {
+      console.error('Error getting entry tags:', error);
+      return [];
+    }
+  }
+
+  setEntryTags(entryId, tags = []) {
+    try {
+      const tagsJson = JSON.stringify(Array.isArray(tags) ? tags : []);
+      const now = Date.now();
+      const stmt = this.db.prepare(`
+        INSERT INTO ai_entry_metadata (entry_id, tags, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(entry_id) DO UPDATE SET tags = excluded.tags, updated_at = excluded.updated_at
+      `);
+      stmt.run(entryId, tagsJson, now);
+      return true;
+    } catch (error) {
+      console.error('Error setting entry tags:', error);
+      return false;
+    }
+  }
+
   // Get entries by category
   getEntriesByCategory(categoryId) {
     try {
@@ -425,9 +463,21 @@ class ClipboardDatabase {
   getAllEntriesWithCategories() {
     try {
       const entries = this.getAllEntries();
+      // Collect entry ids
+      const entryIds = entries.map(e => e.id);
+      const tagsById = new Map();
+      if (entryIds.length > 0) {
+        const placeholders = entryIds.map(() => '?').join(',');
+        const stmt = this.db.prepare(`SELECT entry_id, tags FROM ai_entry_metadata WHERE entry_id IN (${placeholders})`);
+        const rows = stmt.all(...entryIds);
+        rows.forEach(r => {
+          try { tagsById.set(r.entry_id, JSON.parse(r.tags)); } catch (e) { tagsById.set(r.entry_id, []); }
+        });
+      }
       return entries.map(entry => ({
         ...entry,
-        categories: this.getEntryCategories(entry.id)
+        categories: this.getEntryCategories(entry.id),
+        tags: tagsById.get(entry.id) || []
       }));
     } catch (error) {
       console.error('Error getting entries with categories:', error);
@@ -642,8 +692,21 @@ class ClipboardDatabase {
 
       const items = rows.map((entry) => ({
         ...entry,
-        categories: categoriesByEntryId.get(entry.id) || []
+        categories: categoriesByEntryId.get(entry.id) || [],
+        tags: []
       }));
+      // Attach tags for these entries
+      if (items.length > 0) {
+        const ids = items.map(i => i.id);
+        const placeholders = ids.map(() => '?').join(',');
+        const tagsStmt = this.db.prepare(`SELECT entry_id, tags FROM ai_entry_metadata WHERE entry_id IN (${placeholders})`);
+        const tagRows = tagsStmt.all(...ids);
+        const tagsMap = tagRows.reduce((acc, r) => {
+          try { acc.set(r.entry_id, JSON.parse(r.tags)); } catch (e) { acc.set(r.entry_id, []); }
+          return acc;
+        }, new Map());
+        items.forEach(it => { it.tags = tagsMap.get(it.id) || []; });
+      }
 
       return {
         items,

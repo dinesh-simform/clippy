@@ -27,10 +27,14 @@ import LinkIcon from '@mui/icons-material/Link';
 import CodeIcon from '@mui/icons-material/Code';
 import EmailIcon from '@mui/icons-material/Email';
 import LabelIcon from '@mui/icons-material/Label';
+import SummarizeIcon from '@mui/icons-material/Summarize';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import LocalOfferIcon from '@mui/icons-material/LocalOffer';
+import CheckIcon from '@mui/icons-material/Check';
 
 const { ipcRenderer } = window.require('electron');
 
-function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategories, masterPassword }) {
+function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategories, onAISummarize, onAIRewrite, masterPassword }) {
   // Determine source: manual or clipboard
   // If entry.custom_name is set at creation, treat as manual; else clipboard
   const isManual = !!entry.custom_name;
@@ -41,6 +45,10 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
     const [decryptDialogOpen, setDecryptDialogOpen] = useState(false);
+    const [tagDialogOpen, setTagDialogOpen] = useState(false);
+    const [suggestedTags, setSuggestedTags] = useState([]);
+    const [selectedTags, setSelectedTags] = useState([]);
+    const [suggestLoading, setSuggestLoading] = useState(false);
 
   const formatDate = (timestamp) => {
     const date = new Date(timestamp);
@@ -94,8 +102,42 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
     }
     setDecrypting(false);
   };
+
+  const handleSuggestTags = async () => {
+    setSuggestLoading(true);
+    setSuggestedTags([]);
+    setSelectedTags([]);
+    try {
+      const res = await ipcRenderer.invoke('ai-suggest-tags', entry.id);
+      if (!res.success) {
+        setSuggestedTags([]);
+        setSuggestLoading(false);
+        return;
+      }
+      setSuggestedTags(Array.isArray(res.suggestions) ? res.suggestions : []);
+      setTagDialogOpen(true);
+    } catch (e) {
+      console.error('Suggest tags error', e);
+    }
+    setSuggestLoading(false);
+  };
+
+  const handleToggleSelectTag = (tag) => {
+    setSelectedTags((prev) => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]);
+  };
+
+  const handleApplyTags = async () => {
+    try {
+      await ipcRenderer.invoke('set-entry-tags', entry.id, selectedTags);
+      setTagDialogOpen(false);
+      window.dispatchEvent(new Event('categories-updated'));
+    } catch (e) {
+      console.error('Apply tags failed', e);
+    }
+  };
 // console.log("entry",entry);
   return (
+    <>
     <Card 
       sx={{ 
         mb: 2,
@@ -349,6 +391,55 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
             <ContentCopyIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+        <Tooltip title="Suggest tags" arrow>
+          <span>
+            <IconButton
+              size="small"
+              onClick={handleSuggestTags}
+              disabled={suggestLoading}
+              sx={{
+                color: 'info.main',
+                '&:hover': { bgcolor: 'action.hover' }
+              }}
+            >
+              <LocalOfferIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title={entry.is_encrypted ? 'Decrypt entry first' : 'AI summarize'} arrow>
+          <span>
+            <IconButton
+              size="small"
+              disabled={entry.is_encrypted}
+              onClick={() => onAISummarize(entry)}
+              sx={{
+                color: 'success.main',
+                '&:hover': {
+                  bgcolor: 'success.lighter'
+                }
+              }}
+            >
+              <SummarizeIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title={entry.is_encrypted ? 'Decrypt entry first' : 'AI rewrite'} arrow>
+          <span>
+            <IconButton
+              size="small"
+              disabled={entry.is_encrypted}
+              onClick={() => onAIRewrite(entry)}
+              sx={{
+                color: 'secondary.main',
+                '&:hover': {
+                  bgcolor: 'action.hover'
+                }
+              }}
+            >
+              <AutoFixHighIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
         <Tooltip title="Delete" arrow>
           <IconButton 
             size="small" 
@@ -365,6 +456,33 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
         </Tooltip>
       </CardActions>
     </Card>
+
+    <Dialog open={tagDialogOpen} onClose={() => setTagDialogOpen(false)}>
+      <DialogTitle>AI Tag Suggestions</DialogTitle>
+      <DialogContent>
+        {suggestedTags.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">No suggestions</Typography>
+        ) : (
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            {suggestedTags.map((t) => (
+              <Chip
+                key={t}
+                label={t}
+                onClick={() => handleToggleSelectTag(t)}
+                color={selectedTags.includes(t) ? 'primary' : 'default'}
+                icon={selectedTags.includes(t) ? <CheckIcon /> : undefined}
+                sx={{ cursor: 'pointer' }}
+              />
+            ))}
+          </Box>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setTagDialogOpen(false)}>Cancel</Button>
+        <Button onClick={handleApplyTags} variant="contained" disabled={selectedTags.length === 0}>Apply Selected</Button>
+      </DialogActions>
+    </Dialog>
+    </>
   );
 }
 
