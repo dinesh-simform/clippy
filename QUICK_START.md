@@ -6,6 +6,12 @@ Welcome to Clipsy! This guide will help you get started in 5 minutes.
 
 ### Linux
 
+**Prerequisites:**
+Install xdotool for auto-paste functionality:
+```bash
+sudo apt-get install xdotool
+```
+
 1. Download `Clipsy-1.0.0.AppImage`
 2. Make it executable:
    ```bash
@@ -36,6 +42,7 @@ Press **`Ctrl+F9`** anywhere on your system to open the spotlight search.
 - Type to search your clipboard history
 - Use ↑↓ arrows to navigate
 - Press **Enter** to copy selected item
+- Press **Ctrl+Enter** (Cmd+Enter on macOS) to copy and paste automatically
 - Press **Esc** to close
 - Click 🌙/☀️ to toggle dark/light mode
 
