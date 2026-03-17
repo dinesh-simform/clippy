@@ -89,6 +89,23 @@ class ClipboardDatabase {
         FOREIGN KEY (entry_id) REFERENCES clipboard_entries(id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_ai_entry_tags ON ai_entry_metadata(entry_id);
+      
+      CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT,
+        created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
+      );
+
+      CREATE TABLE IF NOT EXISTS ai_chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL,
+        role VARCHAR(16) NOT NULL,
+        content TEXT NOT NULL,
+        timestamp INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+        FOREIGN KEY (session_id) REFERENCES ai_chat_sessions(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ai_chat_session ON ai_chat_messages(session_id);
     `);
 
     console.log('Database initialized successfully');
@@ -440,6 +457,51 @@ class ClipboardDatabase {
     } catch (error) {
       console.error('Error setting entry tags:', error);
       return false;
+    }
+  }
+
+  // Chat session helpers
+  createChatSession(title = null) {
+    try {
+      const now = Date.now();
+      const stmt = this.db.prepare(`INSERT INTO ai_chat_sessions (title, created_at) VALUES (?, ?)`);
+      const result = stmt.run(title || null, now);
+      return result.lastInsertRowid;
+    } catch (error) {
+      console.error('Error creating chat session:', error);
+      return null;
+    }
+  }
+
+  addChatMessage(sessionId, role, content) {
+    try {
+      const ts = Date.now();
+      const stmt = this.db.prepare(`INSERT INTO ai_chat_messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)`);
+      stmt.run(sessionId, role, content, ts);
+      return true;
+    } catch (error) {
+      console.error('Error adding chat message:', error);
+      return false;
+    }
+  }
+
+  getChatSessions(limit = 50) {
+    try {
+      const stmt = this.db.prepare(`SELECT id, title, created_at FROM ai_chat_sessions ORDER BY created_at DESC LIMIT ?`);
+      return stmt.all(limit);
+    } catch (error) {
+      console.error('Error getting chat sessions:', error);
+      return [];
+    }
+  }
+
+  getChatMessages(sessionId) {
+    try {
+      const stmt = this.db.prepare(`SELECT id, role, content, timestamp FROM ai_chat_messages WHERE session_id = ? ORDER BY timestamp ASC`);
+      return stmt.all(sessionId);
+    } catch (error) {
+      console.error('Error getting chat messages:', error);
+      return [];
     }
   }
 

@@ -156,6 +156,7 @@ function App() {
   const [aiDialogOpen, setAiDialogOpen] = useState(false);
   const [aiInput, setAiInput] = useState('');
   const [aiMessages, setAiMessages] = useState([]);
+  const [aiSessionId, setAiSessionId] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiContextEntryIds, setAiContextEntryIds] = useState([]);
   const [aiResultDialog, setAiResultDialog] = useState({ open: false, title: '', content: '' });
@@ -301,6 +302,10 @@ function App() {
   const handleAssignCategories = (entryId, categories) => setCategorySelector({ open: true, entryId, categories });
   const handleCategorySelectorClose = () => setCategorySelector({ open: false, entryId: null, categories: [] });
   const handleCategorySelectorUpdated = () => { handleCategorySelectorClose(); fetchEntries(); };
+  const handleTagsApplied = async (entryId, tags) => {
+    fetchEntries();
+    setSnackbar({ open: true, message: 'Tags applied', severity: 'success' });
+  };
   const handlePageChange = (event, newPage) => setPage(newPage);
 
   const ensureAIReady = async () => {
@@ -323,6 +328,7 @@ function App() {
     setAiContextEntryIds(Array.isArray(contextIds) ? contextIds : []);
     setAiDialogOpen(true);
     if (aiMessages.length === 0) {
+      setAiSessionId(null);
       setAiMessages([
         {
           role: 'assistant',
@@ -343,10 +349,14 @@ function App() {
     setAiBusy(true);
 
     try {
-      const response = await ipcRenderer.invoke('ai-chat', nextMessages, aiContextEntryIds);
+      const response = await ipcRenderer.invoke('ai-chat', nextMessages, aiContextEntryIds, aiSessionId);
       if (!response.success) {
         setSnackbar({ open: true, message: response.error || 'AI chat failed', severity: 'error' });
         return;
+      }
+
+      if (response.data && response.data.sessionId && !aiSessionId) {
+        setAiSessionId(response.data.sessionId);
       }
 
       setAiMessages((prev) => [...prev, { role: 'assistant', content: response.data.text }]);
@@ -703,6 +713,7 @@ function App() {
               onDelete={handleDelete}
               onToggleFavorite={handleToggleFavorite}
               onManageCategories={handleAssignCategories}
+              onTagsApplied={handleTagsApplied}
               onAISummarize={handleAISummarize}
               onAIRewrite={handleAIRewrite}
               masterPassword={masterPassword}

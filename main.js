@@ -212,13 +212,14 @@ function setupIPC() {
   // Get all clipboard entries with caching
   ipcMain.handle('get-clipboard-entries', async () => {
     if (!db) return [];
-    
+
     const now = Date.now();
     if (entriesCache && (now - cacheTimestamp) < CACHE_DURATION) {
       return entriesCache;
     }
-    
-    const entries = db.getAllEntries();
+
+    // Return entries with attached categories and AI metadata (tags)
+    const entries = db.getAllEntriesWithCategories();
     entriesCache = entries;
     cacheTimestamp = now;
     return entries;
@@ -483,7 +484,7 @@ function setupIPC() {
     }
   });
 
-  ipcMain.handle('ai-chat', async (event, messages = [], contextEntryIds = []) => {
+  ipcMain.handle('ai-chat', async (event, messages = [], contextEntryIds = [], existingSessionId = null) => {
     try {
       if (!aiService) return { success: false, error: 'AI is unavailable.' };
 
@@ -507,10 +508,60 @@ function setupIPC() {
         : safeMessages;
 
       const result = await aiService.chat(enrichedMessages);
+
+      // Persist this conversation, grouped by session when sessionId is provided
+      try {
+        if (db) {
+          let sessionId = existingSessionId;
+          if (!sessionId) {
+            const title = `Assistant ${new Date().toLocaleString()}`;
+            sessionId = db.createChatSession(title);
+          }
+          if (sessionId) {
+            // Persist only the latest user message to avoid duplicating full history on every request.
+            const latestUserMessage = safeMessages.length > 0 ? safeMessages[safeMessages.length - 1] : null;
+            if (latestUserMessage && latestUserMessage.content) {
+              try { db.addChatMessage(sessionId, latestUserMessage.role || 'user', latestUserMessage.content); } catch(e) {}
+            }
+
+            // Save assistant reply
+            if (result && result.text) {
+              try { db.addChatMessage(sessionId, 'assistant', result.text); } catch(e) {}
+            }
+          }
+          // Attach sessionId to result for renderer
+          if (result) result.sessionId = sessionId;
+        }
+      } catch (e) {
+        console.error('Failed to persist AI chat:', e);
+      }
+
       return { success: true, data: result };
     } catch (error) {
       return { success: false, error: error.message || 'Chat failed.' };
     }
+  });
+
+  // Chat session endpoints
+  ipcMain.handle('ai-create-session', async (event, title) => {
+    if (!db) return null;
+    return db.createChatSession(title || null);
+  });
+
+  ipcMain.handle('ai-get-sessions', async (event, limit = 50) => {
+    if (!db) return [];
+    return db.getChatSessions(limit);
+  });
+
+  ipcMain.handle('ai-get-messages', async (event, sessionId) => {
+    if (!db) return [];
+    return db.getChatMessages(sessionId);
+  });
+
+  ipcMain.handle('ai-add-message', async (event, sessionId, role, content) => {
+    if (!db) return { success: false };
+    const ok = db.addChatMessage(sessionId, role, content);
+    return { success: !!ok };
   });
 
   // AI suggest tags for an entry

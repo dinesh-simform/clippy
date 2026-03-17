@@ -132,7 +132,7 @@ class AIService {
   }
 
   async suggestTags(text) {
-    const systemInstruction = 'You are a clipboard assistant. Given the user text, suggest up to 6 short tags (1-3 words each) that describe topics, intents, and categories. Output only a JSON array of strings.';
+    const systemInstruction = 'You are a clipboard assistant. Given the user text, suggest up to 6 short tags (1-3 words each) that describe topics, intents, and categories. Output ONLY a valid JSON array of strings and nothing else. Prefer short nouns or noun phrases.';
     const content = `Suggest tags for this clipboard content:\n\n${text}`;
     const resp = await this.chat([
       { role: 'system', content: systemInstruction },
@@ -148,14 +148,17 @@ class AIService {
       if (start !== -1 && end !== -1 && end > start) {
         const jsonStr = out.slice(start, end + 1);
         const parsed = JSON.parse(jsonStr);
-        if (Array.isArray(parsed)) return { tags: parsed, raw: out };
+        if (Array.isArray(parsed)) {
+          const normalized = Array.from(new Set(parsed.map(p => (p || '').toString().trim()).filter(Boolean))).slice(0,6);
+          return { tags: normalized, raw: out };
+        }
       }
     } catch (e) {
       // fallthrough
     }
 
-    // Fallback: split lines or commas
-    const candidates = out.split(/\n|,|;/).map(s => s.trim()).filter(Boolean).slice(0,6);
+    // Fallback: split lines or commas and normalize
+    const candidates = Array.from(new Set(out.split(/\n|,|;/).map(s => s.trim()).filter(Boolean))).slice(0,6);
     return { tags: candidates, raw: out };
   }
 

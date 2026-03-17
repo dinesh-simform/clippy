@@ -312,23 +312,47 @@
     <div class="spotlight-container">
         <div class="header">
             <div class="header-title">Clipboard Search</div>
-            <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <div style="display:flex; gap:8px;">
+                                <button id="tabSearch" class="theme-toggle" title="Search tab">Search</button>
+                                <button id="tabChat" class="theme-toggle" title="AI Chat tab">AI Chat</button>
+                            </div>
+                            <button class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</button>
+                        </div>
         </div>
-        <div class="search-container">
-            <input 
-                type="text" 
-                class="search-input" 
-                id="searchInput" 
-                placeholder="Search clipboard history..."
-                autofocus
-            />
-        </div>
-        <div class="category-chips" id="categoryChips" style="display: none;">
-            <!-- Category chips will be inserted here -->
-        </div>
-        <div class="results-container" id="resultsContainer">
-            <div class="loading">Loading clipboard items...</div>
-        </div>
+                <div id="tabContainer">
+                    <div id="searchTab" style="display:block;">
+                        <div class="search-container">
+                            <input 
+                                    type="text" 
+                                    class="search-input" 
+                                    id="searchInput" 
+                                    placeholder="Search clipboard history..."
+                                    autofocus
+                            />
+                        </div>
+                        <div class="category-chips" id="categoryChips" style="display: none;">
+                        </div>
+                        <div class="results-container" id="resultsContainer">
+                            <div class="loading">Loading clipboard items...</div>
+                        </div>
+                    </div>
+
+                    <div id="chatTab" style="display:none; padding: 16px;">
+                        <div style="display:flex; flex-direction:column; gap:8px;">
+                            <div id="chatMessages" style="max-height:260px; overflow:auto; padding:8px; border-radius:8px; background:var(--bg-secondary);"></div>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <input id="chatInput" type="text" class="search-input" placeholder="Ask the AI about your clipboard..." />
+                                <button id="chatSend" class="theme-toggle">Send</button>
+                            </div>
+                            <div id="aiResponseContainer" style="margin-top:4px; display:none;">
+                                <div id="aiLoading" style="display:none; font-size:13px; color:var(--text-secondary);">Generating AI response…</div>
+                                <div id="aiResponse" style="margin-top:8px; padding:12px; border-radius:8px; background:var(--bg-item); color:var(--text-primary); display:none; white-space:pre-wrap; max-height:160px; overflow:auto;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+        <!-- legacy containers moved into tabs -->
         <div class="hint-text">
             ↑↓ Navigate • Enter Copy • Ctrl+Enter Paste • Esc Close • Click 🌙 to toggle theme
         </div>
@@ -342,6 +366,9 @@
         let selectedIndex = 0;
         let categories = [];
         let selectedCategories = [];
+        let aiBusy = false;
+        let activeTab = 'search';
+        let chatSessionId = null;
         let currentTheme = 'dark';
 
         // Load theme from IPC
@@ -357,12 +384,28 @@
             document.getElementById('themeToggle').textContent = theme === 'light' ? '🌙' : '☀️';
         }
 
-        // Toggle theme
-        document.getElementById('themeToggle').addEventListener('click', async () => {
+                // Toggle theme
+                document.getElementById('themeToggle').addEventListener('click', async () => {
             currentTheme = currentTheme === 'light' ? 'dark' : 'light';
             applyTheme(currentTheme);
             await ipcRenderer.invoke('set-theme-mode', currentTheme);
         });
+
+                // Tabs
+                document.getElementById('tabSearch').addEventListener('click', () => showTab('search'));
+                document.getElementById('tabChat').addEventListener('click', () => showTab('chat'));
+
+                function showTab(name) {
+                    activeTab = name;
+                    document.getElementById('searchTab').style.display = name === 'search' ? 'block' : 'none';
+                    document.getElementById('chatTab').style.display = name === 'chat' ? 'block' : 'none';
+                    document.getElementById('tabSearch').style.background = name === 'search' ? '#111827' : '';
+                    document.getElementById('tabSearch').style.color = name === 'search' ? 'white' : '';
+                    document.getElementById('tabChat').style.background = name === 'chat' ? '#111827' : '';
+                    document.getElementById('tabChat').style.color = name === 'chat' ? 'white' : '';
+                    if (name === 'search') document.getElementById('searchInput').focus();
+                    if (name === 'chat') document.getElementById('chatInput').focus();
+                }
 
         // Load categories
         async function loadCategories() {
@@ -595,10 +638,87 @@
             }
         });
 
-        // Search input
+        // Search input (only active in Search tab)
         document.getElementById('searchInput').addEventListener('input', (e) => {
+            if (activeTab !== 'search') return;
             filterEntries(e.target.value);
         });
+
+        // remove old AI toggle behavior; chat is in Chat tab
+
+        // Chat input handlers
+        document.getElementById('chatInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const q = document.getElementById('chatInput').value.trim();
+                if (!q) return;
+                document.getElementById('chatInput').value = '';
+                performAIChat(q);
+            }
+        });
+
+        document.getElementById('chatSend').addEventListener('click', () => {
+            const q = document.getElementById('chatInput').value.trim();
+            if (!q) return;
+            document.getElementById('chatInput').value = '';
+            performAIChat(q);
+        });
+
+        // AI chat handler (used in Chat tab)
+        async function performAIChat(query) {
+            if (aiBusy) return;
+            aiBusy = true;
+            document.getElementById('aiResponseContainer').style.display = 'block';
+            document.getElementById('aiLoading').style.display = 'block';
+            document.getElementById('aiResponse').style.display = 'none';
+            try {
+                // send chat with minimal system instruction; include recent clip ids as context
+                const pool = allEntries.slice(0, 10);
+                const contextIds = pool.map(e => e.id).slice(0,5);
+                const systemMsg = `You are a helpful clipboard assistant. Answer concisely.`;
+                const response = await ipcRenderer.invoke('ai-chat', [{ role: 'system', content: systemMsg }, { role: 'user', content: query }], contextIds, chatSessionId);
+                if (!response || !response.success) {
+                    document.getElementById('aiLoading').style.display = 'none';
+                    aiBusy = false;
+                    document.getElementById('aiResponse').textContent = 'AI service unavailable.';
+                    document.getElementById('aiResponse').style.display = 'block';
+                    return;
+                }
+
+                const assistantText = (response.data && response.data.text) ? response.data.text : '';
+                if (response.data && response.data.sessionId && !chatSessionId) {
+                    chatSessionId = response.data.sessionId;
+                }
+                // append messages to chat pane
+                appendChatMessage('You', query);
+                appendChatMessage('AI', assistantText);
+
+                // show assistant response area as well
+                if (assistantText) {
+                    document.getElementById('aiResponse').textContent = assistantText;
+                    document.getElementById('aiResponse').style.display = 'block';
+                }
+            } catch (err) {
+                console.error('AI chat failed', err);
+                document.getElementById('aiResponse').textContent = 'AI chat failed';
+                document.getElementById('aiResponse').style.display = 'block';
+            } finally {
+                aiBusy = false;
+                document.getElementById('aiLoading').style.display = 'none';
+            }
+        }
+
+        function appendChatMessage(who, text) {
+            const box = document.getElementById('chatMessages');
+            const el = document.createElement('div');
+            el.style.marginBottom = '8px';
+            el.style.padding = '8px';
+            el.style.borderRadius = '6px';
+            el.style.background = who === 'AI' ? 'var(--bg-item)' : 'var(--bg-primary)';
+            el.textContent = `${who}: ${text}`;
+            box.appendChild(el);
+            box.scrollTop = box.scrollHeight;
+        }
 
         // Listen for refresh signal
         ipcRenderer.on('refresh-clipboard-data', () => {
@@ -607,30 +727,14 @@
             loadTheme();
             document.getElementById('searchInput').value = '';
             selectedCategories = [];
+            chatSessionId = null;
+            document.getElementById('chatMessages').innerHTML = '';
             document.getElementById('searchInput').focus();
         });
 
         // Initial load
         loadTheme();
         loadCategories();
-        loadClipboardEntries();
-    </script>
-</body>
-</html>
-
-        // Search input
-        document.getElementById('searchInput').addEventListener('input', (e) => {
-            filterEntries(e.target.value);
-        });
-
-        // Listen for refresh signal
-        ipcRenderer.on('refresh-clipboard-data', () => {
-            loadClipboardEntries();
-            document.getElementById('searchInput').value = '';
-            document.getElementById('searchInput').focus();
-        });
-
-        // Initial load
         loadClipboardEntries();
     </script>
 </body>

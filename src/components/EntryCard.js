@@ -34,7 +34,7 @@ import CheckIcon from '@mui/icons-material/Check';
 
 const { ipcRenderer } = window.require('electron');
 
-function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategories, onAISummarize, onAIRewrite, masterPassword }) {
+function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategories, onAISummarize, onAIRewrite, onTagsApplied, masterPassword }) {
   // Determine source: manual or clipboard
   // If entry.custom_name is set at creation, treat as manual; else clipboard
   const isManual = !!entry.custom_name;
@@ -128,9 +128,9 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
 
   const handleApplyTags = async () => {
     try {
-      await ipcRenderer.invoke('set-entry-tags', entry.id, selectedTags);
+      const resp = await ipcRenderer.invoke('set-entry-tags', entry.id, selectedTags);
       setTagDialogOpen(false);
-      window.dispatchEvent(new Event('categories-updated'));
+      if (onTagsApplied) onTagsApplied(entry.id, selectedTags);
     } catch (e) {
       console.error('Apply tags failed', e);
     }
@@ -216,6 +216,14 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
                 }}
               />
             ))}
+            {/* Show AI tags if present */}
+            {entry.tags && entry.tags.length > 0 && (
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                {entry.tags.map((t) => (
+                  <Chip key={t} label={t} size="small" sx={{ height: 24, fontSize: '0.7rem' }} />
+                ))}
+              </Box>
+            )}
             <Typography 
               variant="caption" 
               color="text.secondary" 
