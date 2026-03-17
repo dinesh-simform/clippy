@@ -68,6 +68,14 @@
 
 #### Linux
 
+**System Requirements:**
+- `xdotool` - Required for auto-paste functionality on Ubuntu/Linux
+
+Install xdotool:
+```bash
+sudo apt-get install xdotool
+```
+
 **AppImage (Recommended):**
 ```bash
 # Download the AppImage
@@ -79,6 +87,8 @@ chmod +x Clipsy-1.0.0.AppImage
 ```bash
 sudo dpkg -i clipsy_1.0.0_amd64.deb
 sudo apt-get install -f  # Install dependencies
+# Alternatively (handles deps in one step)
+sudo apt install ./clipsy_1.0.0_amd64.deb
 ```
 
 #### Windows
@@ -119,8 +129,13 @@ Press `Ctrl+F9` to open the quick search:
 1. **Search** - Type to filter your clipboard history
 2. **Category Filters** - Click chips to filter by category
 3. **Navigate** - Use arrow keys to navigate results
-4. **Select** - Press Enter to copy item to clipboard
+4. **Copy or Paste** - Press Enter to copy item; press Ctrl+Enter (Cmd+Enter on macOS) to copy and paste at cursor
 5. **Theme Toggle** - Switch between light/dark mode
+
+**Copy/Paste Behavior:**
+- **Enter** → Copies the selected item to your clipboard
+- **Ctrl+Enter (Cmd+Enter)** → Copies and automatically pastes at your cursor (requires `xdotool` on Linux)
+- Spotlight window closes after the action
 
 ### Main Application Window
 
@@ -183,7 +198,7 @@ Press **`Ctrl+F9`** (or `Cmd+F9` on Mac) anywhere to open spotlight search.
 **In Spotlight:**
 - Type to search your clipboard history
 - Use ↑↓ arrow keys to navigate results
-- Press **Enter** to copy selected item to clipboard
+- Press **Enter** to copy and automatically paste selected item
 - Press **Esc** to close the window
 - Click 🌙/☀️ icon to toggle dark/light mode
 

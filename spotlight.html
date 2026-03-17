@@ -330,7 +330,7 @@
             <div class="loading">Loading clipboard items...</div>
         </div>
         <div class="hint-text">
-            ↑↓ Navigate • Enter Select • Esc Close • Click 🌙 to toggle theme
+            ↑↓ Navigate • Enter Copy • Ctrl+Enter Paste • Esc Close • Click 🌙 to toggle theme
         </div>
     </div>
 
@@ -531,8 +531,8 @@
             renderItems();
         }
 
-        // Select and copy item
-        function selectItem(index) {
+        // Select, copy, and optionally paste item
+        function selectItem(index, { paste = false } = {}) {
             if (index >= 0 && index < filteredEntries.length) {
                 const entry = filteredEntries[index];
                 
@@ -542,7 +542,13 @@
                     return;
                 }
                 
+                // Copy to clipboard
                 clipboard.writeText(entry.content);
+                
+                // Optionally request main process to simulate paste action (Ctrl/Cmd+Enter)
+                if (paste) {
+                    ipcRenderer.send('paste-clipboard-content');
+                }
                 
                 // Close the spotlight window
                 window.close();
@@ -582,7 +588,8 @@
                 navigateSelection('up');
             } else if (e.key === 'Enter') {
                 e.preventDefault();
-                selectItem(selectedIndex);
+                const shouldPaste = e.ctrlKey || e.metaKey; // Ctrl+Enter (Win/Linux) or Cmd+Enter (macOS)
+                selectItem(selectedIndex, { paste: shouldPaste });
             } else if (e.key === 'Escape') {
                 window.close();
             }

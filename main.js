@@ -5,28 +5,28 @@ const fs = require('fs');
 const { createTrayIcon } = require('./create-icon');
 const ClipboardDatabase = require('./database');
 
-  // Decrypt entry content (from renderer)
-  ipcMain.handle('decrypt-entry', async (event, entryId, password, masterPassword) => {
-    if (!db) return { success: false, error: 'No DB' };
-    const entry = db.getEntry(entryId);
-    if (!entry || !entry.is_encrypted) return { success: false, error: 'Not encrypted' };
-    // Try user password first
-    try {
-      const content = db.decrypt(entry.content, password, entry.iv);
-      return { success: true, content };
-    } catch (e) {
-      // Try master password if provided
-      if (masterPassword) {
-        try {
-          const content = db.decrypt(entry.content, masterPassword, entry.iv);
-          return { success: true, content };
-        } catch (e2) {
-          // fall through
-        }
-      }
-      return { success: false, error: 'Invalid password or corrupt data' };
+// Single instance lock - prevent multiple instances
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  // Another instance is already running, quit this one
+  app.quit();
+} else {
+  // Handle when a second instance tries to open
+  app.on('second-instance', (event, commandLine, workingDirectory) => {
+    // Someone tried to run a second instance, we should focus our window
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    } else if (spotlightWindow) {
+      if (spotlightWindow.isMinimized()) spotlightWindow.restore();
+      spotlightWindow.focus();
+    } else {
+      // If no window exists, create one
+      createWindow();
     }
   });
+}
 
 let tray = null;
 let db = null; // Database instance
@@ -422,6 +422,29 @@ function setupIPC() {
     }
     return true;
   });
+
+  // Handle paste action - simulate Ctrl+V keypress
+  ipcMain.on('paste-clipboard-content', async (event) => {
+    try {
+      // On Linux, use xdotool to simulate Ctrl+V
+      const { exec } = require('child_process');
+      
+      // Small delay to ensure window focus is on the target application
+      setTimeout(() => {
+        exec('xdotool key --clearmodifiers ctrl+v', (error, stdout, stderr) => {
+          if (error) {
+            console.error('Error simulating paste:', error);
+            // Fallback: try alternative method
+            exec('xdotool key ctrl+v', (err) => {
+              if (err) console.error('Fallback paste also failed:', err);
+            });
+          }
+        });
+      }, 100);
+    } catch (error) {
+      console.error('Error in paste-clipboard-content handler:', error);
+    }
+  });
 }
 
 // Create menu template
@@ -508,7 +531,7 @@ const menuTemplate = [
           dialog.showMessageBox({
             type: 'info',
             title: 'About',
-            message: 'Electron + React App',
+            message: 'CLIPSY',
             detail: 'A simple Electron application with React\nVersion 1.0.0',
             buttons: ['OK']
           });
