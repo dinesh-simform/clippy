@@ -106,7 +106,7 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
         transition: 'all 0.2s ease-in-out',
         '&:hover': { 
           borderColor: 'primary.main',
-          transform: 'translateY(-2px)',
+          // transform: 'translateY(-2px)',
           bgcolor: 'action.hover'
         }
       }}
@@ -202,7 +202,7 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
         
 
         {/* Show "Show as Plaintext" button at the exact top of this content */}
-        {entry.is_encrypted && (
+        {entry.is_encrypted ? (
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.5 }}>
                 <Button
                     size="small"
@@ -213,7 +213,7 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
                     Show as Plaintext
                 </Button>
             </Box>
-        )}
+        ):<></>}
         {/* Encrypted text with eye icon, shown in the same line */}
         {entry.is_encrypted ? (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>

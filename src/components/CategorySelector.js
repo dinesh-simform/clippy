@@ -46,20 +46,7 @@ function CategorySelector({ open, onClose, entryId, currentCategories = [], onCa
 
   const handleSave = async () => {
     try {
-      // Get categories to add and remove
-      const currentIds = currentCategories.map(c => c.id);
-      const toAdd = selectedCategories.filter(id => !currentIds.includes(id));
-      const toRemove = currentIds.filter(id => !selectedCategories.includes(id));
-
-      // Add new categories
-      for (const categoryId of toAdd) {
-        await ipcRenderer.invoke('assign-category', entryId, categoryId);
-      }
-
-      // Remove deselected categories
-      for (const categoryId of toRemove) {
-        await ipcRenderer.invoke('remove-category', entryId, categoryId);
-      }
+      await ipcRenderer.invoke('update-entry-categories', entryId, selectedCategories);
 
       onCategoriesUpdated();
       onClose();

@@ -23,7 +23,6 @@ function ClipboardList({ entries, loading, onCopy, onDelete, onToggleFavorite, o
       </Box>
     );
   }
-console.log("entries",entries)
   return (
     <Box>
       {entries.map((entry) => (

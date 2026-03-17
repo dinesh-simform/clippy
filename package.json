@@ -29,6 +29,8 @@
     "@emotion/styled": "^11.11.0",
     "@mui/icons-material": "^5.14.16",
     "@mui/material": "^5.14.17",
+    "@mui/x-date-pickers": "^6.2.0",
+    "dayjs": "^1.11.9",
     "better-sqlite3": "^11.10.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"

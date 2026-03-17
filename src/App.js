@@ -1,5 +1,5 @@
   
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Switch,
   FormControlLabel,
@@ -9,6 +9,7 @@ import {
   Chip,
   Stack
 } from '@mui/material';
+import dayjs from 'dayjs';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import LightModeIcon from '@mui/icons-material/LightMode';
@@ -30,7 +31,8 @@ import {
   Snackbar,
   Alert,
   ThemeProvider,
-  createTheme
+  createTheme,
+  Pagination
 } from '@mui/material';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import Sidebar from './components/Sidebar';
@@ -120,16 +122,22 @@ function App() {
   const [themeMode, setThemeMode] = useState('light');
   const [categories, setCategories] = useState([]);
   const [entries, setEntries] = useState([]);
-  const [filteredEntries, setFilteredEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedCategoryChips, setSelectedCategoryChips] = useState([]);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(50);
+  const [totalEntries, setTotalEntries] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [categorySelector, setCategorySelector] = useState({ open: false, entryId: null, categories: [] });
   const [dateRange, setDateRange] = useState('all');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [newEntryText, setNewEntryText] = useState('');
   const [newEntryTitle, setNewEntryTitle] = useState('');
@@ -143,6 +151,7 @@ function App() {
   const [showMasterPassword, setShowMasterPassword] = useState(false);
   // Settings dialog state
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const latestFetchIdRef = useRef(0);
 
   // Create theme based on mode
   const theme = useMemo(() => createAppTheme(themeMode), [themeMode]);
@@ -202,70 +211,56 @@ function App() {
   };
   // Fetch clipboard entries (memoized)
   const fetchEntries = useCallback(async () => {
+    const fetchId = ++latestFetchIdRef.current;
     setLoading(true);
-    let allEntries = await ipcRenderer.invoke('get-entries-with-categories');
-    setEntries(allEntries);
-    filterEntries(allEntries, selectedCategory, searchQuery, dateRange, selectedCategoryChips);
-    setLoading(false);
-  }, [selectedCategory, searchQuery, dateRange, selectedCategoryChips]);
-
-  // Filter entries based on category, search, and date (memoized)
-  const filterEntries = useCallback((allEntries, category, query, range, chipFilters = []) => {
-    let filtered = [...allEntries];
-    // Category filter from sidebar
-    if (category === 'favorites') filtered = filtered.filter(e => e.is_favorite);
-    else if (category === 'urls') filtered = filtered.filter(e => /^https?:\/\/.+/i.test(e.content));
-    else if (category === 'emails') filtered = filtered.filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.content));
-    else if (category === 'code') filtered = filtered.filter(e => /^(function|const|let|var|class|import|export|if|for|while)/.test(e.content));
-    else if (category.startsWith('custom-')) {
-      const catId = parseInt(category.replace('custom-', ''));
-      filtered = filtered.filter(e => (e.categories || []).some(c => c.id === catId));
-    }
-    
-    // Category chip filters (multiple categories including default and custom)
-    if (chipFilters.length > 0) {
-      filtered = filtered.filter(e => {
-        return chipFilters.some(chipCat => {
-          // Handle default categories (strings)
-          if (chipCat === 'favorites') return e.is_favorite;
-          if (chipCat === 'urls') return /^https?:\/\/.+/i.test(e.content);
-          if (chipCat === 'emails') return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.content);
-          if (chipCat === 'code') return /^(function|const|let|var|class|import|export|if|for|while)/.test(e.content);
-          // Handle custom categories (numeric IDs)
-          if (typeof chipCat === 'number') {
-            const entryCategoryIds = (e.categories || []).map(c => c.id);
-            return entryCategoryIds.includes(chipCat);
-          }
-          return false;
-        });
-      });
-    }
-    
-    // Search filter
-    if (query) filtered = filtered.filter(e => e.content.toLowerCase().includes(query.toLowerCase()) || (e.custom_name && e.custom_name.toLowerCase().includes(query.toLowerCase())));
-    // Date filter
-    if (range !== 'all') {
-      const now = new Date();
-      let start, end = now.getTime();
-      if (range === 'today') {
-        start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-      } else if (range === 'yesterday') {
-        start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
-        end = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-      } else if (range === 'last7days') {
-        start = now.getTime() - 7 * 24 * 60 * 60 * 1000;
-      } else if (range === 'last30days') {
-        start = now.getTime() - 30 * 24 * 60 * 60 * 1000;
-      } else if (range === 'last90days') {
-        start = now.getTime() - 90 * 24 * 60 * 60 * 1000;
+    try {
+      const options = {
+        selectedCategory,
+        selectedCategoryChips,
+        searchQuery: debouncedSearchQuery,
+        dateRange,
+        page,
+        pageSize
+      };
+      if (dateRange === 'custom' && customStart && customEnd) {
+        const startTs = dayjs(customStart).startOf('day').valueOf();
+        const endTs = dayjs(customEnd).endOf('day').valueOf();
+        options.startTimestamp = startTs;
+        options.endTimestamp = endTs;
       }
-      filtered = filtered.filter(e => e.timestamp >= start && e.timestamp <= end);
+
+      const result = await ipcRenderer.invoke('get-entries-paginated', options);
+
+      if (fetchId !== latestFetchIdRef.current) return;
+
+      setEntries(result.items || []);
+      setTotalEntries(result.total || 0);
+      setTotalPages(result.totalPages || 1);
+    } catch (error) {
+      if (fetchId !== latestFetchIdRef.current) return;
+      setEntries([]);
+      setTotalEntries(0);
+      setTotalPages(1);
+      setSnackbar({ open: true, message: 'Failed to load clipboard entries', severity: 'error' });
+    } finally {
+      if (fetchId === latestFetchIdRef.current) {
+        setLoading(false);
+      }
     }
-    setFilteredEntries(filtered);
-  }, []);
+  }, [selectedCategory, selectedCategoryChips, debouncedSearchQuery, dateRange, page, pageSize]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [selectedCategory, selectedCategoryChips, debouncedSearchQuery, dateRange]);
 
   useEffect(() => { fetchEntries(); }, [fetchEntries]);
-  useEffect(() => { filterEntries(entries, selectedCategory, searchQuery, dateRange, selectedCategoryChips); }, [filterEntries, entries, selectedCategory, searchQuery, dateRange, selectedCategoryChips]);
   useEffect(() => {
     const handleUpdate = () => fetchEntries();
     ipcRenderer.on('clipboard-updated', handleUpdate);
@@ -275,7 +270,19 @@ function App() {
   // Handlers
   const handleSearchChange = (query) => setSearchQuery(query);
   const handleCategoryChange = (cat) => setSelectedCategory(cat);
-  const handleDateRangeChange = (range) => setDateRange(range);
+  const handleDateRangeChange = (range) => {
+    setDateRange(range);
+    if (range !== 'custom') {
+      setCustomStart('');
+      setCustomEnd('');
+    }
+  };
+
+  const handleCustomRangeChange = (startIso, endIso) => {
+    setCustomStart(startIso || '');
+    setCustomEnd(endIso || '');
+    setDateRange('custom');
+  };
   const handleCopy = async (id) => { await ipcRenderer.invoke('copy-entry', id); setSnackbar({ open: true, message: 'Copied to clipboard!', severity: 'success' }); };
   const handleDelete = async (id) => { await ipcRenderer.invoke('delete-entry', id); fetchEntries(); setSnackbar({ open: true, message: 'Entry deleted', severity: 'success' }); };
   const handleToggleFavorite = async (id) => { await ipcRenderer.invoke('toggle-favorite', id); fetchEntries(); };
@@ -286,6 +293,7 @@ function App() {
   const handleAssignCategories = (entryId, categories) => setCategorySelector({ open: true, entryId, categories });
   const handleCategorySelectorClose = () => setCategorySelector({ open: false, entryId: null, categories: [] });
   const handleCategorySelectorUpdated = () => { handleCategorySelectorClose(); fetchEntries(); };
+  const handlePageChange = (event, newPage) => setPage(newPage);
 
   return (
     <ThemeProvider theme={theme}>
@@ -343,7 +351,7 @@ function App() {
         </Dialog>
             <Box sx={{ px: 2, py: 0.5, bgcolor: 'primary.lighter', borderRadius: 2, mr: 2 }}>
               <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main' }}>
-                {entries.length} {entries.length === 1 ? 'item' : 'items'}
+                {totalEntries} {totalEntries === 1 ? 'item' : 'items'}
               </Typography>
             </Box>
             <Button
@@ -432,9 +440,9 @@ function App() {
           <Toolbar />
           <Container maxWidth="lg">
             {/* Search and Date Filter Row */}
-            <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'center' }}>
+              <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'center' }}>
               <SearchBar searchQuery={searchQuery} onSearchChange={handleSearchChange} />
-              <DateFilter selectedRange={dateRange} onRangeChange={handleDateRangeChange} />
+              <DateFilter selectedRange={dateRange} onRangeChange={handleDateRangeChange} onCustomRangeChange={handleCustomRangeChange} customStart={customStart} customEnd={customEnd} />
             </Box>
             
             {/* Category Filter Chips */}
@@ -568,7 +576,7 @@ function App() {
             
             {/* Clipboard List */}
             <ClipboardList
-              entries={filteredEntries}
+              entries={entries}
               loading={loading}
               onCopy={handleCopy}
               onDelete={handleDelete}
@@ -576,6 +584,17 @@ function App() {
               onManageCategories={handleAssignCategories}
               masterPassword={masterPassword}
             />
+            {totalPages > 1 && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+                <Pagination
+                  count={totalPages}
+                  page={page}
+                  onChange={handlePageChange}
+                  color="primary"
+                  shape="rounded"
+                />
+              </Box>
+            )}
           </Container>
         </Box>
         {/* Clear All Confirmation Dialog */}

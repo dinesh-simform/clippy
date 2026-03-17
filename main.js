@@ -333,10 +333,34 @@ function setupIPC() {
     return result;
   });
 
+  // Replace all categories for an entry in one operation
+  ipcMain.handle('update-entry-categories', async (event, entryId, categoryIds = []) => {
+    if (!db) return false;
+    const result = db.setEntryCategories(entryId, categoryIds);
+    if (mainWindow) {
+      mainWindow.webContents.send('clipboard-updated');
+    }
+    return result;
+  });
+
   // Get entries with categories
   ipcMain.handle('get-entries-with-categories', async () => {
     if (!db) return [];
     return db.getAllEntriesWithCategories();
+  });
+
+  // Get entries with server-side filters and pagination
+  ipcMain.handle('get-entries-paginated', async (event, options = {}) => {
+    if (!db) {
+      return {
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: 50,
+        totalPages: 1
+      };
+    }
+    return db.getEntriesWithFilters(options);
   });
 
   // Get entries by category

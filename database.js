@@ -78,6 +78,9 @@ class ClipboardDatabase {
       CREATE INDEX IF NOT EXISTS idx_timestamp ON clipboard_entries(timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_content_hash ON clipboard_entries(content_hash);
       CREATE INDEX IF NOT EXISTS idx_favorite ON clipboard_entries(is_favorite);
+      CREATE INDEX IF NOT EXISTS idx_custom_name ON clipboard_entries(custom_name);
+      CREATE INDEX IF NOT EXISTS idx_entry_categories_entry ON entry_categories(entry_id);
+      CREATE INDEX IF NOT EXISTS idx_entry_categories_category ON entry_categories(category_id);
     `);
 
     console.log('Database initialized successfully');
@@ -353,6 +356,40 @@ class ClipboardDatabase {
     }
   }
 
+  // Replace all categories for an entry in a single transaction
+  setEntryCategories(entryId, categoryIds = []) {
+    try {
+      const normalizedCategoryIds = Array.from(
+        new Set(
+          (Array.isArray(categoryIds) ? categoryIds : [])
+            .map((id) => parseInt(id, 10))
+            .filter((id) => Number.isFinite(id))
+        )
+      );
+
+      const replaceCategoriesTx = this.db.transaction((targetEntryId, ids) => {
+        this.db.prepare('DELETE FROM entry_categories WHERE entry_id = ?').run(targetEntryId);
+
+        if (ids.length === 0) return;
+
+        const insertStmt = this.db.prepare(`
+          INSERT OR IGNORE INTO entry_categories (entry_id, category_id)
+          VALUES (?, ?)
+        `);
+
+        ids.forEach((categoryId) => {
+          insertStmt.run(targetEntryId, categoryId);
+        });
+      });
+
+      replaceCategoriesTx(entryId, normalizedCategoryIds);
+      return true;
+    } catch (error) {
+      console.error('Error replacing entry categories:', error);
+      return false;
+    }
+  }
+
   // Get categories for an entry
   getEntryCategories(entryId) {
     try {
@@ -395,6 +432,235 @@ class ClipboardDatabase {
     } catch (error) {
       console.error('Error getting entries with categories:', error);
       return [];
+    }
+  }
+
+  // Build SQL condition for built-in and custom category filters
+  buildCategoryCondition(category, tableAlias = 'e') {
+    const normalized = (category || '').toString();
+    const contentExpr = `LOWER(TRIM(${tableAlias}.content))`;
+
+    if (normalized === 'favorites') {
+      return { clause: `${tableAlias}.is_favorite = 1`, params: [] };
+    }
+
+    if (normalized === 'urls') {
+      return {
+        clause: `(${contentExpr} LIKE 'http://%' OR ${contentExpr} LIKE 'https://%')`,
+        params: []
+      };
+    }
+
+    if (normalized === 'emails') {
+      return {
+        clause: `(
+          ${contentExpr} LIKE '%@%.%'
+          AND ${contentExpr} NOT LIKE '% %'
+        )`,
+        params: []
+      };
+    }
+
+    if (normalized === 'code') {
+      return {
+        clause: `(
+          ${contentExpr} LIKE 'function%'
+          OR ${contentExpr} LIKE 'const%'
+          OR ${contentExpr} LIKE 'let%'
+          OR ${contentExpr} LIKE 'var%'
+          OR ${contentExpr} LIKE 'class%'
+          OR ${contentExpr} LIKE 'import%'
+          OR ${contentExpr} LIKE 'export%'
+          OR ${contentExpr} LIKE 'if%'
+          OR ${contentExpr} LIKE 'for%'
+          OR ${contentExpr} LIKE 'while%'
+        )`,
+        params: []
+      };
+    }
+
+    if (normalized.startsWith('custom-')) {
+      const parsedId = parseInt(normalized.replace('custom-', ''), 10);
+      if (Number.isFinite(parsedId)) {
+        return {
+          clause: `EXISTS (
+            SELECT 1 FROM entry_categories ec
+            WHERE ec.entry_id = ${tableAlias}.id AND ec.category_id = ?
+          )`,
+          params: [parsedId]
+        };
+      }
+    }
+
+    if (typeof category === 'number' && Number.isFinite(category)) {
+      return {
+        clause: `EXISTS (
+          SELECT 1 FROM entry_categories ec
+          WHERE ec.entry_id = ${tableAlias}.id AND ec.category_id = ?
+        )`,
+        params: [category]
+      };
+    }
+
+    return { clause: '', params: [] };
+  }
+
+  // Compute date bounds for date filter values
+  getDateRangeBounds(range) {
+    if (!range || range === 'all') return null;
+
+    const now = new Date();
+    let start;
+    let end = now.getTime();
+
+    if (range === 'today') {
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    } else if (range === 'yesterday') {
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
+      end = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    } else if (range === 'last7days') {
+      start = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+    } else if (range === 'last30days') {
+      start = now.getTime() - 30 * 24 * 60 * 60 * 1000;
+    } else if (range === 'last90days') {
+      start = now.getTime() - 90 * 24 * 60 * 60 * 1000;
+    }
+
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    return { start, end };
+  }
+
+  // Query entries with server-side filters and pagination
+  getEntriesWithFilters(options = {}) {
+    try {
+      const {
+        selectedCategory = 'all',
+        selectedCategoryChips = [],
+        searchQuery = '',
+        dateRange = 'all',
+        page = 1,
+        pageSize = 50
+      } = options;
+
+      const safePage = Math.max(1, parseInt(page, 10) || 1);
+      const safePageSize = Math.min(200, Math.max(10, parseInt(pageSize, 10) || 50));
+      const offset = (safePage - 1) * safePageSize;
+
+      const whereClauses = [];
+      const whereParams = [];
+
+      if (selectedCategory && selectedCategory !== 'all') {
+        const { clause, params } = this.buildCategoryCondition(selectedCategory, 'e');
+        if (clause) {
+          whereClauses.push(clause);
+          whereParams.push(...params);
+        }
+      }
+
+      if (Array.isArray(selectedCategoryChips) && selectedCategoryChips.length > 0) {
+        const chipClauses = [];
+        const chipParams = [];
+
+        selectedCategoryChips.forEach((chip) => {
+          const { clause, params } = this.buildCategoryCondition(chip, 'e');
+          if (clause) {
+            chipClauses.push(clause);
+            chipParams.push(...params);
+          }
+        });
+
+        if (chipClauses.length > 0) {
+          whereClauses.push(`(${chipClauses.join(' OR ')})`);
+          whereParams.push(...chipParams);
+        }
+      }
+
+      const normalizedSearch = (searchQuery || '').trim().toLowerCase();
+      if (normalizedSearch) {
+        whereClauses.push("(LOWER(e.content) LIKE ? OR LOWER(COALESCE(e.custom_name, '')) LIKE ?)");
+        const searchLike = `%${normalizedSearch}%`;
+        whereParams.push(searchLike, searchLike);
+      }
+
+      // If explicit timestamps provided, use them; otherwise derive from named range
+      if (options.startTimestamp !== undefined && options.endTimestamp !== undefined) {
+        whereClauses.push('e.timestamp >= ? AND e.timestamp <= ?');
+        whereParams.push(options.startTimestamp, options.endTimestamp);
+      } else {
+        const dateBounds = this.getDateRangeBounds(dateRange);
+        if (dateBounds) {
+          whereClauses.push('e.timestamp >= ? AND e.timestamp <= ?');
+          whereParams.push(dateBounds.start, dateBounds.end);
+        }
+      }
+
+      const whereSQL = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+      const totalStmt = this.db.prepare(`
+        SELECT COUNT(*) as total
+        FROM clipboard_entries e
+        ${whereSQL}
+      `);
+      const total = totalStmt.get(...whereParams).total;
+
+      const entriesStmt = this.db.prepare(`
+        SELECT e.id, e.content, e.timestamp, e.is_favorite, e.custom_name, e.is_encrypted, e.iv
+        FROM clipboard_entries e
+        ${whereSQL}
+        ORDER BY e.timestamp DESC
+        LIMIT ? OFFSET ?
+      `);
+      const rows = entriesStmt.all(...whereParams, safePageSize, offset);
+
+      let categoriesByEntryId = new Map();
+      if (rows.length > 0) {
+        const entryIds = rows.map((entry) => entry.id);
+        const placeholders = entryIds.map(() => '?').join(',');
+        const categoriesStmt = this.db.prepare(`
+          SELECT ec.entry_id, c.id, c.name, c.color, c.icon, c.created_at
+          FROM entry_categories ec
+          INNER JOIN custom_categories c ON c.id = ec.category_id
+          WHERE ec.entry_id IN (${placeholders})
+          ORDER BY c.name ASC
+        `);
+        const categoryRows = categoriesStmt.all(...entryIds);
+
+        categoriesByEntryId = categoryRows.reduce((acc, row) => {
+          if (!acc.has(row.entry_id)) {
+            acc.set(row.entry_id, []);
+          }
+          acc.get(row.entry_id).push({
+            id: row.id,
+            name: row.name,
+            color: row.color,
+            icon: row.icon,
+            created_at: row.created_at
+          });
+          return acc;
+        }, new Map());
+      }
+
+      const items = rows.map((entry) => ({
+        ...entry,
+        categories: categoriesByEntryId.get(entry.id) || []
+      }));
+
+      return {
+        items,
+        total,
+        page: safePage,
+        pageSize: safePageSize,
+        totalPages: Math.max(1, Math.ceil(total / safePageSize))
+      };
+    } catch (error) {
+      console.error('Error getting filtered entries:', error);
+      return {
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: 50,
+        totalPages: 1
+      };
     }
   }
 
