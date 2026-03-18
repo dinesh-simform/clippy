@@ -31,6 +31,15 @@ import SummarizeIcon from '@mui/icons-material/Summarize';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 import CheckIcon from '@mui/icons-material/Check';
+import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
+
+const QUICK_OFFSETS = [
+  { label: '5 min', ms: 5 * 60 * 1000 },
+  { label: '15 min', ms: 15 * 60 * 1000 },
+  { label: '30 min', ms: 30 * 60 * 1000 },
+  { label: '1 hour', ms: 60 * 60 * 1000 },
+  { label: '3 hours', ms: 3 * 60 * 60 * 1000 },
+];
 
 const { ipcRenderer } = window.require('electron');
 
@@ -49,6 +58,12 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
     const [suggestedTags, setSuggestedTags] = useState([]);
     const [selectedTags, setSelectedTags] = useState([]);
     const [suggestLoading, setSuggestLoading] = useState(false);
+    const [reminderDialogOpen, setReminderDialogOpen] = useState(false);
+    const [reminderNote, setReminderNote] = useState('');
+    const [reminderCustomTime, setReminderCustomTime] = useState('');
+    const [reminderBusy, setReminderBusy] = useState(false);
+    const [activeReminder, setActiveReminder] = useState(null);
+    const [selectedQuickLabel, setSelectedQuickLabel] = useState('');
 
   const formatDate = (timestamp) => {
     const date = new Date(timestamp);
@@ -133,6 +148,57 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
       if (onTagsApplied) onTagsApplied(entry.id, selectedTags);
     } catch (e) {
       console.error('Apply tags failed', e);
+    }
+  };
+
+  const handleSetReminder = async (remindAt) => {
+    setReminderBusy(true);
+    try {
+      await ipcRenderer.invoke('add-reminder', entry.id, remindAt, reminderNote);
+      setActiveReminder({ remind_at: remindAt, note: reminderNote || '', created_at: Date.now() });
+      setReminderDialogOpen(false);
+      setReminderNote('');
+      setReminderCustomTime('');
+    } catch (e) {
+      console.error('Set reminder failed', e);
+    }
+    setReminderBusy(false);
+  };
+
+  const formatForDateTimeLocal = (timestamp) => {
+    const d = new Date(timestamp);
+    const pad = (n) => `${n}`.padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const detectQuickLabelFromReminder = (reminder) => {
+    if (!reminder || !reminder.created_at || !reminder.remind_at) return '';
+    const delta = reminder.remind_at - reminder.created_at;
+    const toleranceMs = 90 * 1000;
+    const match = QUICK_OFFSETS.find(({ ms }) => Math.abs(ms - delta) <= toleranceMs);
+    return match ? match.label : '';
+  };
+
+  const loadReminderState = async () => {
+    try {
+      const reminders = await ipcRenderer.invoke('get-reminders-for-entry', entry.id);
+      const now = Date.now();
+      const nextActive = (Array.isArray(reminders) ? reminders : []).find((r) => !r.triggered && r.remind_at > now);
+      setActiveReminder(nextActive || null);
+
+      if (nextActive) {
+        setReminderNote(nextActive.note || '');
+        setReminderCustomTime(formatForDateTimeLocal(nextActive.remind_at));
+        setSelectedQuickLabel(detectQuickLabelFromReminder(nextActive));
+      } else {
+        setReminderNote('');
+        setReminderCustomTime('');
+        setSelectedQuickLabel('');
+      }
+    } catch (e) {
+      console.error('Load reminder state failed', e);
+      setActiveReminder(null);
+      setSelectedQuickLabel('');
     }
   };
 // console.log("entry",entry);
@@ -385,6 +451,15 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
             <LabelIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+        <Tooltip title="Set reminder" arrow>
+          <IconButton
+            size="small"
+            onClick={async () => { await loadReminderState(); setReminderDialogOpen(true); }}
+            sx={{ color: activeReminder ? 'success.main' : 'warning.main', '&:hover': { bgcolor: 'action.hover' } }}
+          >
+            <NotificationsActiveIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         <Tooltip title="Copy to clipboard" arrow>
           <IconButton 
             size="small" 
@@ -488,6 +563,63 @@ function EntryCard({ entry, onCopy, onDelete, onToggleFavorite, onManageCategori
       <DialogActions>
         <Button onClick={() => setTagDialogOpen(false)}>Cancel</Button>
         <Button onClick={handleApplyTags} variant="contained" disabled={selectedTags.length === 0}>Apply Selected</Button>
+      </DialogActions>
+    </Dialog>
+
+    <Dialog open={reminderDialogOpen} onClose={() => setReminderDialogOpen(false)} maxWidth="xs" fullWidth>
+      <DialogTitle>Set Reminder</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Get notified about this clipboard entry at the chosen time.
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+          {QUICK_OFFSETS.map(({ label, ms }) => (
+            <Button
+              key={label}
+              size="small"
+              variant={selectedQuickLabel === label ? 'contained' : 'outlined'}
+              disabled={reminderBusy}
+              onClick={() => {
+                setSelectedQuickLabel(label);
+                handleSetReminder(Date.now() + ms);
+              }}
+            >
+              {label}
+            </Button>
+          ))}
+        </Box>
+        {activeReminder && (
+          <Typography variant="caption" color="success.main" sx={{ display: 'block', mb: 1 }}>
+            Active reminder set for {new Date(activeReminder.remind_at).toLocaleString()}
+          </Typography>
+        )}
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>or pick a custom time:</Typography>
+        <TextField
+          type="datetime-local"
+          size="small"
+          fullWidth
+          value={reminderCustomTime}
+          onChange={e => setReminderCustomTime(e.target.value)}
+          sx={{ mb: 2 }}
+        />
+        <TextField
+          label="Optional note"
+          size="small"
+          fullWidth
+          value={reminderNote}
+          onChange={e => setReminderNote(e.target.value)}
+          placeholder="e.g. Review this before the call"
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setReminderDialogOpen(false)}>Cancel</Button>
+        <Button
+          variant="contained"
+          disabled={!reminderCustomTime || reminderBusy}
+          onClick={() => handleSetReminder(new Date(reminderCustomTime).getTime())}
+        >
+          Remind me
+        </Button>
       </DialogActions>
     </Dialog>
     </>

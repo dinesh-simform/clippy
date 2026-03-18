@@ -1,5 +1,5 @@
 
-const { app, BrowserWindow, Menu, Tray, clipboard, nativeImage, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, Menu, Tray, clipboard, nativeImage, ipcMain, globalShortcut, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { createTrayIcon } = require('./create-icon');
@@ -579,6 +579,30 @@ function setupIPC() {
     }
   });
 
+  // ===== REMINDERS =====
+
+  ipcMain.handle('add-reminder', async (event, entryId, remindAt, note) => {
+    if (!db) return { success: false, error: 'DB unavailable' };
+    const id = db.addReminder(entryId, remindAt, note || '');
+    return id ? { success: true, id } : { success: false, error: 'Failed to add reminder' };
+  });
+
+  ipcMain.handle('cancel-reminder', async (event, reminderId) => {
+    if (!db) return { success: false };
+    const ok = db.cancelReminder(reminderId);
+    return { success: !!ok };
+  });
+
+  ipcMain.handle('get-reminders-for-entry', async (event, entryId) => {
+    if (!db) return [];
+    return db.getRemindersForEntry(entryId);
+  });
+
+  ipcMain.handle('get-all-reminders', async () => {
+    if (!db) return [];
+    return db.getActiveReminders();
+  });
+
   // Persist tags for an entry
   ipcMain.handle('set-entry-tags', async (event, entryId, tags = []) => {
     try {
@@ -909,82 +933,6 @@ function updateTrayMenu() {
     ...historyMenuItems,
     { type: 'separator' },
     {
-      label: 'Copy Selected Text',
-      click: () => {
-        const windows = BrowserWindow.getAllWindows();
-        if (windows.length > 0) {
-          // Get the first visible window or just the first window
-          const targetWindow = windows.find(w => w.isVisible()) || windows[0];
-          
-          // Make sure the window is visible and focused
-          if (!targetWindow.isVisible()) {
-            targetWindow.show();
-          }
-          targetWindow.focus();
-          
-          // Execute JavaScript in the renderer process to get selected text
-          targetWindow.webContents.executeJavaScript('window.getSelection().toString()')
-            .then(selectedText => {
-              if (selectedText && selectedText.trim()) {
-                clipboard.writeText(selectedText);
-                addToClipboardHistory(selectedText); // Add to history
-                console.log('Selected text copied to clipboard:', selectedText);
-                
-                // Show a notification that text was copied
-                const { dialog } = require('electron');
-                dialog.showMessageBox(targetWindow, {
-                  type: 'info',
-                  title: 'Text Copied',
-                  message: 'Selected text copied to clipboard!',
-                  detail: `Copied: "${selectedText.substring(0, 50)}${selectedText.length > 50 ? '...' : ''}"`,
-                  buttons: ['OK']
-                });
-              } else {
-                // No text selected
-                const { dialog } = require('electron');
-                dialog.showMessageBox(targetWindow, {
-                  type: 'warning',
-                  title: 'No Text Selected',
-                  message: 'Please select some text first',
-                  detail: 'Highlight text in the application before using Copy Selected Text',
-                  buttons: ['OK']
-                });
-              }
-            })
-            .catch(err => {
-              console.error('Error getting selected text:', err);
-              // Show error dialog
-              const { dialog } = require('electron');
-              dialog.showMessageBox(targetWindow, {
-                type: 'error',
-                title: 'Error',
-                message: 'Failed to copy selected text',
-                detail: err.message,
-                buttons: ['OK']
-              });
-            });
-        } else {
-          // No windows open - create one first
-          createWindow();
-        }
-      }
-    },
-    {
-      label: 'Paste from Clipboard',
-      click: () => {
-        const text = clipboard.readText();
-        console.log('Clipboard content:', text);
-        const { dialog } = require('electron');
-        dialog.showMessageBox({
-          type: 'info',
-          title: 'Clipboard Content',
-          message: 'Current clipboard content:',
-          detail: text || '(empty)',
-          buttons: ['OK']
-        });
-      }
-    },
-    {
       label: 'View Clipboard History',
       click: () => {
         const windows = BrowserWindow.getAllWindows();
@@ -1080,6 +1028,26 @@ app.whenReady().then(() => {
   
   // Setup IPC handlers
   setupIPC();
+
+  // Start reminder polling (every 30 seconds)
+  setInterval(() => {
+    if (!db) return;
+    const now = Date.now();
+    const due = db.getActiveReminders().filter(r => r.remind_at <= now);
+    due.forEach(r => {
+      db.markReminderTriggered(r.id);
+      const title = r.custom_name || 'Clipboard Reminder';
+      const body = r.note
+        ? `${r.note}\n\n${(r.content || '').slice(0, 120)}`
+        : (r.content || '').slice(0, 200);
+      if (Notification.isSupported()) {
+        new Notification({ title, body, silent: false }).show();
+      }
+      if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('reminder-triggered', { id: r.id, entryId: r.entry_id, note: r.note, content: r.content });
+      }
+    });
+  }, 30000);
   
   // Build menu from template
   const menu = Menu.buildFromTemplate(menuTemplate);

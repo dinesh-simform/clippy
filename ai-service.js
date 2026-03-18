@@ -132,7 +132,7 @@ class AIService {
   }
 
   async suggestTags(text) {
-    const systemInstruction = 'You are a clipboard assistant. Given the user text, suggest up to 6 short tags (1-3 words each) that describe topics, intents, and categories. Output ONLY a valid JSON array of strings and nothing else. Prefer short nouns or noun phrases.';
+    const systemInstruction = 'You are a clipboard assistant. Given the user text, suggest up to 6 short tags (1-3 words each) that describe topics, intents, and categories. Output ONLY a valid JSON array of strings and nothing else. Prefer short phrases.';
     const content = `Suggest tags for this clipboard content:\n\n${text}`;
     const resp = await this.chat([
       { role: 'system', content: systemInstruction },

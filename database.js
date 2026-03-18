@@ -106,6 +106,18 @@ class ClipboardDatabase {
       );
 
       CREATE INDEX IF NOT EXISTS idx_ai_chat_session ON ai_chat_messages(session_id);
+
+      CREATE TABLE IF NOT EXISTS reminders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_id INTEGER NOT NULL,
+        remind_at INTEGER NOT NULL,
+        note TEXT,
+        triggered INTEGER DEFAULT 0,
+        created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+        FOREIGN KEY (entry_id) REFERENCES clipboard_entries(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_reminders_remind_at ON reminders(remind_at);
     `);
 
     console.log('Database initialized successfully');
@@ -501,6 +513,67 @@ class ClipboardDatabase {
       return stmt.all(sessionId);
     } catch (error) {
       console.error('Error getting chat messages:', error);
+      return [];
+    }
+  }
+
+  // ===== REMINDERS =====
+
+  addReminder(entryId, remindAt, note = '') {
+    try {
+      const now = Date.now();
+      const stmt = this.db.prepare(`INSERT INTO reminders (entry_id, remind_at, note, created_at) VALUES (?, ?, ?, ?)`);
+      const result = stmt.run(entryId, remindAt, note || '', now);
+      return result.lastInsertRowid;
+    } catch (error) {
+      console.error('Error adding reminder:', error);
+      return null;
+    }
+  }
+
+  cancelReminder(reminderId) {
+    try {
+      this.db.prepare(`DELETE FROM reminders WHERE id = ?`).run(reminderId);
+      return true;
+    } catch (error) {
+      console.error('Error cancelling reminder:', error);
+      return false;
+    }
+  }
+
+  getActiveReminders() {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT r.id, r.entry_id, r.remind_at, r.note,
+               e.content, e.custom_name
+        FROM reminders r
+        LEFT JOIN clipboard_entries e ON e.id = r.entry_id
+        WHERE r.triggered = 0
+        ORDER BY r.remind_at ASC
+      `);
+      return stmt.all();
+    } catch (error) {
+      console.error('Error getting active reminders:', error);
+      return [];
+    }
+  }
+
+  markReminderTriggered(reminderId) {
+    try {
+      this.db.prepare(`UPDATE reminders SET triggered = 1 WHERE id = ?`).run(reminderId);
+      return true;
+    } catch (error) {
+      console.error('Error marking reminder triggered:', error);
+      return false;
+    }
+  }
+
+  getRemindersForEntry(entryId) {
+    try {
+      const stmt = this.db.prepare(`SELECT id, remind_at, note, triggered, created_at FROM reminders WHERE entry_id = ? ORDER BY remind_at ASC`);
+      return stmt.all(entryId);
+    } catch (error) {
+      console.error('Error getting reminders for entry:', error);
       return [];
     }
   }

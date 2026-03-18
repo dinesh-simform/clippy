@@ -276,6 +276,18 @@ function App() {
     return () => ipcRenderer.removeListener('clipboard-updated', handleUpdate);
   }, [fetchEntries]);
 
+  useEffect(() => {
+    const handleReminder = (event, data) => {
+      const preview = (data.content || '').slice(0, 60);
+      const msg = data.note
+        ? `⏰ Reminder: ${data.note}${preview ? ` — "${preview}"` : ''}`
+        : `⏰ Reminder: "${preview || 'Clipboard entry'}"`;
+      setSnackbar({ open: true, message: msg, severity: 'info' });
+    };
+    ipcRenderer.on('reminder-triggered', handleReminder);
+    return () => ipcRenderer.removeListener('reminder-triggered', handleReminder);
+  }, []);
+
   // Handlers
   const handleSearchChange = (query) => setSearchQuery(query);
   const handleCategoryChange = (cat) => setSelectedCategory(cat);
@@ -837,7 +849,7 @@ function App() {
 
         {/* Snackbar for notifications */}
         <Snackbar open={snackbar.open} autoHideDuration={3000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
-          <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%', boxShadow: 'none', border: '1px solid', borderColor: snackbar.severity === 'success' ? 'success.main' : 'error.main' }}>{snackbar.message}</Alert>
+          <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} sx={{ width: '100%', boxShadow: 'none', border: '1px solid', borderColor: snackbar.severity === 'success' ? 'success.main' : snackbar.severity === 'info' ? 'info.main' : 'error.main' }}>{snackbar.message}</Alert>
         </Snackbar>
         {/* Category Manager Dialog */}
         <CategoryManager open={categoryManagerOpen} onClose={() => setCategoryManagerOpen(false)} onCategoriesChanged={handleCategoriesChanged} />

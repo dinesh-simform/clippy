@@ -186,6 +186,22 @@ Open **Settings** and configure **AI Settings (Phase 1)**:
   - Main toolbar: **AI Assistant**
   - Entry actions: **Summarize** and **Rewrite**
 
+## **AI Features**
+
+- **AI Categorizations (Tags):**: Clipsy can suggest short topic tags for clipboard content using the AI assistant. Suggestions are produced by the AI service and persisted in the database (`ai_entry_metadata.tags`). See the implementation in [ai-service.js](ai-service.js) and storage in [database.js](database.js).
+- **AI Summarization:**: Generate a short, actionable summary for any clipboard entry. The summarization call is implemented by `ai-service.summarize()` and exposed via the `ai-rewrite-entry` / `ai-summarize-entry` IPC handlers in [main.js](main.js).
+- **AI Chat & Sessions:**: A conversational assistant is available from Spotlight and the main UI. Chats are grouped into sessions and persisted to `ai_chat_sessions` and `ai_chat_messages` tables so you can continue conversations later. Relevant code: [ai-service.js](ai-service.js), chat persistence in [database.js](database.js), and IPC endpoints in [main.js](main.js). Spotlight UI lives in [spotlight.html](spotlight.html).
+
+> Quick links: `ai-chat`, `ai-get-sessions`, `ai-get-messages`, `ai-add-message`, `ai-suggest-tags` (IPC handlers in [main.js](main.js)).
+
+## **Reminders**
+
+- **Per-entry Reminders:**: You can set reminders on any clipboard entry (quick picks or a custom time). Reminders are stored in the `reminders` table and include `remind_at`, `note`, and `created_at`.
+- **Background Processing:**: The main process polls active reminders (every 30s), marks them triggered when due, shows a native system `Notification`, and emits a `reminder-triggered` IPC event to the renderer. See reminder handling in [main.js](main.js) and storage helpers in [database.js](database.js).
+- **Renderer Integration:**: The entry UI shows reminder controls and rehydrates an entry's active reminder state when opening the reminder dialog (see [src/components/EntryCard.js](src/components/EntryCard.js)).
+
+For developer details: the IPC handlers include `add-reminder`, `cancel-reminder`, `get-reminders-for-entry`, and `get-all-reminders` (implemented in [main.js](main.js)).
+
 ## 🏗️ Building from Source
 
 See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for detailed build instructions.
